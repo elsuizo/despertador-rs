@@ -1,3 +1,53 @@
-fn main() {
-    println!("Hello, world!");
+//! This example shows how to use RTC (Real Time Clock) in the RP2040 chip.
+
+#![no_std]
+#![no_main]
+
+use defmt::*;
+use embassy_executor::Spawner;
+use embassy_rp::rtc::{DateTime, DayOfWeek, Rtc};
+use embassy_time::Timer;
+use {defmt_rtt as _, panic_probe as _};
+
+#[embassy_executor::main]
+async fn main(_spawner: Spawner) {
+    let p = embassy_rp::init(Default::default());
+    info!("Wait for 20s");
+
+    let mut rtc = Rtc::new(p.RTC);
+
+    info!("Start RTC");
+    let now = DateTime {
+        year: 2024,
+        month: 4,
+        day: 9,
+        day_of_week: DayOfWeek::Tuesday,
+        hour: 13,
+        minute: 50,
+        second: 0,
+    };
+    rtc.set_datetime(now).unwrap();
+
+    Timer::after_millis(20000).await;
+
+    // if let Ok(dt) = rtc.now() {
+    //     info!(
+    //         "Now: {}-{:02}-{:02} {}:{:02}:{:02}",
+    //         dt.year, dt.month, dt.day, dt.hour, dt.minute, dt.second,
+    //     );
+    // }
+
+    loop {
+        Timer::after_secs(1).await;
+        if let Ok(dt) = rtc.now() {
+            info!(
+                "Now: {}-{:02}-{:02} {}:{:02}:{:02}",
+                dt.year, dt.month, dt.day, dt.hour, dt.minute, dt.second,
+            );
+        }
+    }
+
+    // info!("Reboot.");
+    // Timer::after_millis(200).await;
+    // cortex_m::peripheral::SCB::sys_reset();
 }
