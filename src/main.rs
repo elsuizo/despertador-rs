@@ -76,11 +76,7 @@ async fn main(_spawner: Spawner) {
     let mut time: String<256> = String::new();
 
     loop {
-        // Text::new("Martin Noblia", Point::new(0, 20), normal)
-        //     .draw(&mut display)
-        //     .unwrap();
-        // display.flush().ok();
-        Timer::after_millis(500).await;
+        Timer::after_millis(100).await;
 
         if let Ok(dt) = rtc.now() {
             write!(
@@ -95,10 +91,6 @@ async fn main(_spawner: Spawner) {
             display.flush().ok();
             time.clear();
             display.clear();
-            // info!(
-            //     "Now: {}-{:02}-{:02} {}:{:02}:{:02}",
-            //     dt.year, dt.month, dt.day, dt.hour, dt.minute, dt.second,
-            // );
         }
     }
 }
