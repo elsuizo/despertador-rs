@@ -18,14 +18,15 @@
 
 // use core::fmt::Write;
 // use defmt::write;
+// use core::fmt::Write;
 use core::fmt::Write;
 use defmt::info;
-use defmt::*;
+// use defmt::*;
 use embassy_executor::Spawner;
 use embassy_futures::select::{select, Either};
 use embassy_rp::gpio::{AnyPin, Input, Level, Output, Pull};
 use embassy_rp::i2c::{self, Config};
-use embassy_rp::rtc::{DateTime, DayOfWeek, Rtc};
+use embassy_rp::rtc::{DateTime, DayOfWeek, Instance, Rtc};
 use embassy_sync::{
     blocking_mutex::raw::{CriticalSectionRawMutex, RawMutex},
     pubsub::{PubSubChannel, Publisher, Subscriber},
@@ -86,71 +87,75 @@ pub async fn state(mut button_command_input: ButtonMessageSub) {
     }
 }
 
+pub fn clock_read<'r, T: Instance + 'r>(rtc: Rtc<'r, T>) -> String<256> {
+    let mut time: String<256> = String::new();
+    if let Ok(dt) = rtc.now() {
+        info!(
+            "aca dentro del if let tendriamos que mostrar la hora pero no se que pasa que no anda"
+        );
+        write!(
+            &mut time,
+            "{:02}:{:02}:{:02}",
+            dt.hour, dt.minute, dt.second,
+        )
+        .unwrap();
+    } else {
+        info!("Parece que no anda el rtc")
+    }
+    time
+}
+
+#[embassy_executor::task]
+pub async fn clock_update(mut button_command_input: ButtonMessageSub) {}
+
 #[embassy_executor::main]
 async fn main(spawner: Spawner) {
     info!("Comienzo de programa");
     let p = embassy_rp::init(Default::default());
+    let mut led = Output::new(p.PIN_25, Level::Low);
+
+    info!("Configuring the i2c");
+    //-------------------------------------------------------------------------
+    //                        display init
+    //-------------------------------------------------------------------------
+    let sda = p.PIN_14;
+    let scl = p.PIN_15;
+
+    let i2c = i2c::I2c::new_blocking(p.I2C1, scl, sda, Config::default());
+
+    let mut rtc = Rtc::new(p.RTC);
+
+    let mut display: GraphicsMode<_> = Builder::new().connect_i2c(i2c).into();
+
+    led.set_high();
+    display.init().ok();
+    display.flush().ok();
     spawner.must_spawn(buttons_task(
         p.PIN_16.into(),
         p.PIN_19.into(),
         BUTTON_CHANNEL.publisher().unwrap(),
     ));
     spawner.must_spawn(state(BUTTON_CHANNEL.subscriber().unwrap()));
+    //-------------------------------------------------------------------------
+    //                        rtc init
+    //-------------------------------------------------------------------------
+    info!("Start RTC");
+    let now = DateTime {
+        year: 2024,
+        month: 4,
+        day: 18,
+        day_of_week: DayOfWeek::Thursday,
+        hour: 10,
+        minute: 28,
+        second: 0,
+    };
+    rtc.set_datetime(now).unwrap();
 
-    // info!("Configuring the i2c");
-    // //-------------------------------------------------------------------------
-    // //                        display init
-    // //-------------------------------------------------------------------------
-    // let sda = p.PIN_14;
-    // let scl = p.PIN_15;
-    //
-    // let i2c = i2c::I2c::new_blocking(p.I2C1, scl, sda, Config::default());
-    //
-    // let mut rtc = Rtc::new(p.RTC);
-    //
-    // let mut display: GraphicsMode<_> = Builder::new().connect_i2c(i2c).into();
-    //
-    // display.init().ok();
-    // display.flush().ok();
-    //
-    // //-------------------------------------------------------------------------
-    // //                        rtc init
-    // //-------------------------------------------------------------------------
-    // // info!("Start RTC");
-    // let now = DateTime {
-    //     year: 2024,
-    //     month: 4,
-    //     day: 18,
-    //     day_of_week: DayOfWeek::Thursday,
-    //     hour: 10,
-    //     minute: 28,
-    //     second: 0,
-    // };
-    // rtc.set_datetime(now).unwrap();
-    //
-    // let normal = MonoTextStyleBuilder::new()
-    //     .font(&FONT_10X20)
-    //     .text_color(BinaryColor::On)
-    //     .build();
-    // let mut time: String<256> = String::new();
-    //
+    let normal = MonoTextStyleBuilder::new()
+        .font(&FONT_10X20)
+        .text_color(BinaryColor::On)
+        .build();
     // loop {
     //     Timer::after_millis(100).await;
-    //
-    //     if let Ok(dt) = rtc.now() {
-    //         write!(
-    //             &mut time,
-    //             "{:02}:{:02}:{:02}",
-    //             dt.hour, dt.minute, dt.second,
-    //         )
-    //         .unwrap();
-    //         Text::new(&time, Point::new(0, 20), normal)
-    //             .draw(&mut display)
-    //             .unwrap();
-    //         display.flush().ok();
-    //         time.clear();
-    //         display.clear();
-    //     }
     // }
-    //
 }
