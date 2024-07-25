@@ -19,6 +19,8 @@ embassy-futures = { version = "0.1.0"}
 # cyw43 = { version = "0.1.0", features = ["defmt", "firmware-logs"] }
 # cyw43-pio = { version = "0.1.0", features = ["defmt", "overclock"] }
 
+static_cell = "2.1.0"
+portable-atomic = { version = "1.5", features = ["critical-section"] }
 defmt = "0.3"
 defmt-rtt = "0.4"
 fixed = "1.23.1"
@@ -38,6 +40,8 @@ display-interface = "0.4.1"
 # byte-slice-cast = { version = "1.2.0", default-features = false }
 # smart-leds = "0.3.0"
 heapless = "0.8"
+# TODO(elsuizo:2024-07-24): no satisface las ultimas versiones de embassy
+# mpu6050-async={ git = "https://github.com/kalkyl/mpu6050-async.git" }
 # usbd-hid = "0.7.0"
 # NOTE(elsuizo:2024-07-11): esto no anda porque depende de una version de
 # embedded-hal vieja
