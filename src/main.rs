@@ -4,12 +4,18 @@
 // TODOs
 // - [x] sacar las dependencias que sobran
 // - [x] conectar y hacer andar el lcd
+// - [ ] hay que hacer un mod que tenga todo lo del clock
+// - [ ] hay que hacer un mod que tenga todo lo del display
+// - [ ] hay que hacer un mod que tenga todo lo de la ui
 // - [ ] hacer un menu para el lcd
-//      - [ ] tiene que tener un modo para mostrar la hora
-//          - [ ] Hacer una tarea que tenga a los botones que emitan una senial cuando cambian de
+//      - [X] tiene que tener un modo para mostrar la hora
+//          - [X] Hacer una tarea que tenga a los botones que emitan una senial cuando cambian de
 //          estado
+//      - [ ] ver como hacer para activar una alarma o hacerla a mano
 //      - [ ] tiene que tener un modo para setear la hora
+//          - [ ] esto tiene que llamar a una task `set-time` o algo asi
 //      - [ ] tiene que tener un modo para setear la alarma
+//          - [ ] esto tiene que llamar a una task `set-time` o algo asi
 //      - [ ] tiene que tener un modo para alarma
 //              - [ ] la alarma tiene que lanzar algun sonido(podria ser un buzzer para empezar)
 //----------------------------------------------------------------------------
@@ -71,11 +77,19 @@ type Pub<T, const N: usize> = Publisher<'static, ChannelMutex, T, 1, N, 1>;
 type Sub<T, const N: usize> = Subscriber<'static, ChannelMutex, T, 1, N, 1>;
 type Ch<T, const N: usize> = PubSubChannel<ChannelMutex, T, 1, N, 1>;
 
-const BUTTON_NUMBER: usize = 1;
+// NOTE(elsuizo: 2024-07-28): creo que esto es la cantidad de tasks que pueden recibir como
+// parametro alguna de estas seniales
+const BUTTONS_CHANNEL_CAP: usize = 2;
 pub type ButtonMessageType = Msg;
-pub type ButtonMessagePub = Pub<ButtonMessageType, BUTTON_NUMBER>;
-pub type ButtonMessageSub = Sub<ButtonMessageType, BUTTON_NUMBER>;
-pub static BUTTON_CHANNEL: Ch<ButtonMessageType, BUTTON_NUMBER> = PubSubChannel::new();
+pub type ButtonMessagePub = Pub<ButtonMessageType, BUTTONS_CHANNEL_CAP>;
+pub type ButtonMessageSub = Sub<ButtonMessageType, BUTTONS_CHANNEL_CAP>;
+pub static BUTTON_CHANNEL: Ch<ButtonMessageType, BUTTONS_CHANNEL_CAP> = PubSubChannel::new();
+
+const CLOCK_CHANNEL_NUM: usize = 2;
+pub type ClockMessageType = ClockState;
+pub type ClockMessagePub = Pub<ClockMessageType, CLOCK_CHANNEL_NUM>;
+pub type ClockMessageSub = Sub<ClockMessageType, CLOCK_CHANNEL_NUM>;
+pub static CLOCK_STATE_CHANNEL: Ch<ClockMessageType, CLOCK_CHANNEL_NUM> = PubSubChannel::new();
 
 #[derive(Debug, Clone, Copy)]
 pub enum ClockState {
@@ -119,12 +133,12 @@ impl ClockFSM {
 }
 
 #[embassy_executor::task]
-pub async fn clock_update(
+pub async fn display(
     i2c: embassy_rp::i2c::I2c<'static, I2C1, embassy_rp::i2c::Blocking>,
     rtc: embassy_rp::rtc::Rtc<'static, RTC>,
-    shared_clock_fsm: &'static RefCell<ClockFSM>,
+    mut clock_state_signal_in: ClockMessageSub,
 ) {
-    let mut ticker = Ticker::every(Duration::from_millis(1000));
+    let mut ticker = Ticker::every(Duration::from_millis(300));
     let mut display: GraphicsMode<_> = Builder::new().connect_i2c(i2c).into();
     display.init().ok();
     display.flush().ok();
@@ -138,17 +152,17 @@ pub async fn clock_update(
 
     loop {
         let time = clock_read(&rtc);
-        MUTEX_BLOCKING.lock(|x| match x.borrow().state {
+        match clock_state_signal_in.next_message_pure().await {
             ClockState::Time => {
                 Text::new(&time, Point::new(37, 13), normal).draw(&mut display);
-            }
-            ClockState::Alarm => {
-                Text::new(&time, Point::new(37, 37), normal).draw(&mut display);
             }
             ClockState::Image => {
                 Image::new(&logo_image, Point::new(32, 0)).draw(&mut display);
             }
-        });
+            ClockState::Alarm => {
+                Text::new("Alarm!!!", Point::new(37, 13), normal).draw(&mut display);
+            }
+        }
         // Text::new(&time, Point::new(37, 13), normal).draw(&mut display);
         // info!("clock update, state: {:?}", *shared_clock_fsm.borrow());
         // Text::new(&time, Point::new(37, 13), normal).draw(&mut display);
@@ -163,8 +177,8 @@ fn clock_read<'r, T: Instance + 'r>(rtc: &Rtc<'r, T>) -> String<256> {
     if let Ok(dt) = rtc.now() {
         write!(
             &mut time,
-            "{:02}:{:02}:{:02}",
-            dt.hour, dt.minute, dt.second,
+            "{:02}:{:02}:{:02}\n{:}{:}{:}",
+            dt.hour, dt.minute, dt.second, dt.day, dt.month, dt.year
         )
         .unwrap();
     } else {
@@ -174,15 +188,15 @@ fn clock_read<'r, T: Instance + 'r>(rtc: &Rtc<'r, T>) -> String<256> {
 }
 
 #[embassy_executor::task]
-pub async fn buttons_task(button1: AnyPin, button2: AnyPin, button_command: ButtonMessagePub) {
+pub async fn buttons_reader(button1: AnyPin, button2: AnyPin, button_command: ButtonMessagePub) {
     let mut ticker = Ticker::every(Duration::from_millis(3));
-    info!("Hola desde la tarea buttons_tasks");
+    // info!("Hola desde la tarea buttons_tasks");
     let mut button1 = Input::new(button1, Pull::None);
     let mut button2 = Input::new(button2, Pull::None);
     loop {
         match select(button1.wait_for_low(), button2.wait_for_low()).await {
-            Either::First(_a) => button_command.publish_immediate(Msg::Up),
-            Either::Second(_t) => button_command.publish_immediate(Msg::Down),
+            Either::First(_) => button_command.publish_immediate(Msg::Up),
+            Either::Second(_) => button_command.publish_immediate(Msg::Continue),
         }
         ticker.next().await;
     }
@@ -191,17 +205,17 @@ pub async fn buttons_task(button1: AnyPin, button2: AnyPin, button_command: Butt
 // NOTE(elsuizo: 2024-07-12): esta seria la tarea que va a cambiar el estado del menu en el
 // display, dependiendo desde que botton le llega
 #[embassy_executor::task]
-pub async fn state(
+pub async fn clock_controller(
     mut button_command_input: ButtonMessageSub,
-    shared_clock_fsm: &'static RefCell<ClockFSM>,
+    clock_state_signal_out: ClockMessagePub,
 ) {
     let mut ticker = Ticker::every(Duration::from_millis(30));
+    let mut clock_fsm = ClockFSM::init(ClockState::Time);
 
     loop {
         let message = button_command_input.next_message_pure().await;
-        MUTEX_BLOCKING.lock(|x| {
-            x.borrow_mut().next_state(message);
-        });
+        clock_fsm.next_state(message);
+        clock_state_signal_out.publish_immediate(clock_fsm.state);
         ticker.next().await;
     }
 }
@@ -248,15 +262,12 @@ async fn main(spawner: Spawner) {
         .text_color(BinaryColor::On)
         .build();
 
-    static REF_CELL: ConstStaticCell<RefCell<ClockFSM>> =
-        ConstStaticCell::new(RefCell::new(ClockFSM {
-            state: ClockState::Time,
-        }));
-
-    let ref_cell = REF_CELL.take();
-    spawner.must_spawn(clock_update(i2c, rtc, ref_cell));
-    spawner.must_spawn(state(BUTTON_CHANNEL.subscriber().unwrap(), ref_cell));
-    spawner.must_spawn(buttons_task(
+    spawner.must_spawn(display(i2c, rtc, CLOCK_STATE_CHANNEL.subscriber().unwrap()));
+    spawner.must_spawn(clock_controller(
+        BUTTON_CHANNEL.subscriber().unwrap(),
+        CLOCK_STATE_CHANNEL.publisher().unwrap(),
+    ));
+    spawner.must_spawn(buttons_reader(
         p.PIN_16.into(),
         p.PIN_19.into(),
         BUTTON_CHANNEL.publisher().unwrap(),
