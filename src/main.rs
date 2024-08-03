@@ -35,7 +35,7 @@ use static_cell::{ConstStaticCell, StaticCell};
 // use defmt::*;
 use embassy_embedded_hal::shared_bus::asynch::i2c::I2cDevice;
 use embassy_executor::Spawner;
-use embassy_futures::select::{select, Either};
+use embassy_futures::select::{select, select3, Either};
 use embassy_rp::gpio::{AnyPin, Input, Level, Output, Pull};
 use embassy_rp::i2c::I2c;
 use embassy_rp::i2c::{self, Config};
@@ -54,13 +54,6 @@ use log::*;
 use sh1106::{prelude::*, Builder};
 use {defmt_rtt as _, panic_probe as _};
 
-static MUTEX_BLOCKING: blocking_mutex::Mutex<CriticalSectionRawMutex, RefCell<ClockFSM>> =
-    blocking_mutex::Mutex::new(RefCell::new(ClockFSM {
-        state: ClockState::Time,
-    }));
-// pub type OledDisplay = GraphicsMode<I2cInterface<I2c<>>;
-static EXECUTOR_LOW: StaticCell<Executor> = StaticCell::new();
-
 use embedded_graphics::{
     image::{Image, ImageRawLE},
     mono_font::{ascii::FONT_10X20, ascii::FONT_9X15, MonoTextStyleBuilder},
@@ -70,7 +63,6 @@ use embedded_graphics::{
 };
 
 type ChannelMutex = CriticalSectionRawMutex;
-type FsmMutex = mutex::Mutex<NoopRawMutex, ClockFSM>;
 
 // Short-hand type alias for PubSubChannel
 type Pub<T, const N: usize> = Publisher<'static, ChannelMutex, T, 1, N, 1>;
@@ -154,7 +146,7 @@ pub async fn display(
         let time = clock_read(&rtc);
         match clock_state_signal_in.next_message_pure().await {
             ClockState::Time => {
-                Text::new(&time, Point::new(37, 13), normal).draw(&mut display);
+                Text::new(&time, Point::new(30, 13), normal).draw(&mut display);
             }
             ClockState::Image => {
                 Image::new(&logo_image, Point::new(32, 0)).draw(&mut display);
@@ -163,9 +155,6 @@ pub async fn display(
                 Text::new("Alarm!!!", Point::new(37, 13), normal).draw(&mut display);
             }
         }
-        // Text::new(&time, Point::new(37, 13), normal).draw(&mut display);
-        // info!("clock update, state: {:?}", *shared_clock_fsm.borrow());
-        // Text::new(&time, Point::new(37, 13), normal).draw(&mut display);
         display.flush().ok();
         display.clear();
         ticker.next().await;
@@ -177,8 +166,8 @@ fn clock_read<'r, T: Instance + 'r>(rtc: &Rtc<'r, T>) -> String<256> {
     if let Ok(dt) = rtc.now() {
         write!(
             &mut time,
-            "{:02}:{:02}:{:02}\n{:}{:}{:}",
-            dt.hour, dt.minute, dt.second, dt.day, dt.month, dt.year
+            "{:02}:{:02}:{:02}\n{:}-{:}-{:}\n{:?}",
+            dt.hour, dt.minute, dt.second, dt.day, dt.month, dt.year, dt.day_of_week
         )
         .unwrap();
     } else {
@@ -189,15 +178,17 @@ fn clock_read<'r, T: Instance + 'r>(rtc: &Rtc<'r, T>) -> String<256> {
 
 #[embassy_executor::task]
 pub async fn buttons_reader(button1: AnyPin, button2: AnyPin, button_command: ButtonMessagePub) {
-    let mut ticker = Ticker::every(Duration::from_millis(3));
+    let mut ticker = Ticker::every(Duration::from_millis(30));
     // info!("Hola desde la tarea buttons_tasks");
-    let mut button1 = Input::new(button1, Pull::None);
-    let mut button2 = Input::new(button2, Pull::None);
+    let mut button1 = Input::new(button1, Pull::Up);
+    let mut button2 = Input::new(button2, Pull::Up);
+    button_command.publish_immediate(Msg::Continue);
     loop {
         match select(button1.wait_for_low(), button2.wait_for_low()).await {
             Either::First(_) => button_command.publish_immediate(Msg::Up),
-            Either::Second(_) => button_command.publish_immediate(Msg::Continue),
+            Either::Second(_) => button_command.publish_immediate(Msg::Down),
         }
+        button_command.publish(Msg::Continue).await;
         ticker.next().await;
     }
 }
@@ -249,10 +240,10 @@ async fn main(spawner: Spawner) {
     let now = DateTime {
         year: 2024,
         month: 7,
-        day: 26,
-        day_of_week: DayOfWeek::Wednesday,
-        hour: 10,
-        minute: 34,
+        day: 29,
+        day_of_week: DayOfWeek::Monday,
+        hour: 11,
+        minute: 17,
         second: 0,
     };
     rtc.set_datetime(now).unwrap();
@@ -262,14 +253,14 @@ async fn main(spawner: Spawner) {
         .text_color(BinaryColor::On)
         .build();
 
-    spawner.must_spawn(display(i2c, rtc, CLOCK_STATE_CHANNEL.subscriber().unwrap()));
     spawner.must_spawn(clock_controller(
         BUTTON_CHANNEL.subscriber().unwrap(),
         CLOCK_STATE_CHANNEL.publisher().unwrap(),
     ));
+    spawner.must_spawn(display(i2c, rtc, CLOCK_STATE_CHANNEL.subscriber().unwrap()));
     spawner.must_spawn(buttons_reader(
         p.PIN_16.into(),
-        p.PIN_19.into(),
+        p.PIN_17.into(),
         BUTTON_CHANNEL.publisher().unwrap(),
     ));
 }
