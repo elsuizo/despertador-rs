@@ -279,6 +279,7 @@ dependencies = [
  "fixed",
  "fixed-macro",
  "heapless",
+ "keypad",
  "log",
  "panic-probe",
  "pio",
@@ -848,6 +849,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b0fd2260e829bddf4cb6ea802289de2f86d6a7a690192fbe91b3f46e0f2c8473"
 dependencies = [
  "either",
+]
+
+[[package]]
+name = "keypad"
+version = "0.2.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6cd098757f3c79a71672ea320a457ba57ab42f25f628145473329fa59c320d37"
+dependencies = [
+ "embedded-hal 0.2.7",
 ]
 
 [[package]]

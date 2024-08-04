@@ -24,33 +24,28 @@
 // TODO(elsuizo: 2024-07-25): put all the clock stuff in one file
 // mod clock;
 // use clock::clock_update;
-use core::cell::{Cell, RefCell};
-use embassy_executor::{Executor, InterruptExecutor};
+use keypad::embedded_hal::digital::v2::InputPin;
+use keypad::{keypad_new, keypad_struct};
 // use core::fmt::Write;
 // use defmt::write;
 // use core::fmt::Write;
+use core::convert::Infallible;
 use core::fmt::Write;
 use defmt::info;
-use static_cell::{ConstStaticCell, StaticCell};
 // use defmt::*;
-use embassy_embedded_hal::shared_bus::asynch::i2c::I2cDevice;
 use embassy_executor::Spawner;
 use embassy_futures::select::{select, select3, Either};
 use embassy_rp::gpio::{AnyPin, Input, Level, Output, Pull};
-use embassy_rp::i2c::I2c;
 use embassy_rp::i2c::{self, Config};
 use embassy_rp::peripherals::I2C1;
 use embassy_rp::peripherals::RTC;
 use embassy_rp::rtc::{DateTime, DayOfWeek, Instance, Rtc};
-use embassy_sync::{blocking_mutex, mutex};
 use embassy_sync::{
-    blocking_mutex::raw::{CriticalSectionRawMutex, NoopRawMutex, RawMutex},
+    blocking_mutex::raw::CriticalSectionRawMutex,
     pubsub::{PubSubChannel, Publisher, Subscriber},
 };
-use embassy_time::Timer;
 use embassy_time::{Duration, Ticker};
-use heapless::String;
-use log::*;
+use heapless::{LinearMap, String};
 use sh1106::{prelude::*, Builder};
 use {defmt_rtt as _, panic_probe as _};
 
@@ -82,6 +77,23 @@ pub type ClockMessageType = ClockState;
 pub type ClockMessagePub = Pub<ClockMessageType, CLOCK_CHANNEL_NUM>;
 pub type ClockMessageSub = Sub<ClockMessageType, CLOCK_CHANNEL_NUM>;
 pub static CLOCK_STATE_CHANNEL: Ch<ClockMessageType, CLOCK_CHANNEL_NUM> = PubSubChannel::new();
+
+keypad_struct! {
+    pub struct Keypad< Error = Infallible> {
+        rows: (
+            Input<'static, AnyPin>,
+            Input<'static, AnyPin>,
+            Input<'static, AnyPin>,
+            Input<'static, AnyPin>,
+        ),
+        columns: (
+            Output<'static, AnyPin>,
+            Output<'static, AnyPin>,
+            Output<'static, AnyPin>,
+            Output<'static, AnyPin>,
+        ),
+    }
+}
 
 #[derive(Debug, Clone, Copy)]
 pub enum ClockState {
@@ -177,17 +189,27 @@ fn clock_read<'r, T: Instance + 'r>(rtc: &Rtc<'r, T>) -> String<256> {
 }
 
 #[embassy_executor::task]
-pub async fn buttons_reader(button1: AnyPin, button2: AnyPin, button_command: ButtonMessagePub) {
+pub async fn buttons_reader(keypad: Keypad, button_command: ButtonMessagePub) {
     let mut ticker = Ticker::every(Duration::from_millis(30));
     // info!("Hola desde la tarea buttons_tasks");
-    let mut button1 = Input::new(button1, Pull::Up);
-    let mut button2 = Input::new(button2, Pull::Up);
+    // let mut button2 = Input::new(button2, Pull::Up);
     button_command.publish_immediate(Msg::Continue);
+    let keys = keypad.decompose();
+
+    // let first_key = &keys[0][0];
     loop {
-        match select(button1.wait_for_low(), button2.wait_for_low()).await {
-            Either::First(_) => button_command.publish_immediate(Msg::Up),
-            Either::Second(_) => button_command.publish_immediate(Msg::Down),
+        for (row_index, row) in keys.iter().enumerate() {
+            for (col_index, key) in row.iter().enumerate() {
+                if key.is_low().unwrap() {
+                    button_command.publish_immediate(Msg::Up);
+                    info!("Pressed: ({}, {})", row_index, col_index);
+                }
+            }
         }
+        // match select(button1.wait_for_low(), button2.wait_for_low()).await {
+        //     Either::First(_) => button_command.publish_immediate(Msg::Up),
+        //     Either::Second(_) => button_command.publish_immediate(Msg::Down),
+        // }
         button_command.publish(Msg::Continue).await;
         ticker.next().await;
     }
@@ -216,7 +238,20 @@ async fn main(spawner: Spawner) {
     info!("init program");
     let p = embassy_rp::init(Default::default());
     let mut led = Output::new(p.PIN_25, Level::Low);
-
+    let keypad = keypad_new!(Keypad {
+        rows: (
+            Input::new(AnyPin::from(p.PIN_0), Pull::Up),
+            Input::new(AnyPin::from(p.PIN_1), Pull::Up),
+            Input::new(AnyPin::from(p.PIN_2), Pull::Up),
+            Input::new(AnyPin::from(p.PIN_3), Pull::Up),
+        ),
+        columns: (
+            Output::new(AnyPin::from(p.PIN_4), Level::Low),
+            Output::new(AnyPin::from(p.PIN_5), Level::Low),
+            Output::new(AnyPin::from(p.PIN_6), Level::Low),
+            Output::new(AnyPin::from(p.PIN_7), Level::Low),
+        ),
+    });
     info!("Configuring the i2c");
     //-------------------------------------------------------------------------
     //                        display init
@@ -258,11 +293,7 @@ async fn main(spawner: Spawner) {
         CLOCK_STATE_CHANNEL.publisher().unwrap(),
     ));
     spawner.must_spawn(display(i2c, rtc, CLOCK_STATE_CHANNEL.subscriber().unwrap()));
-    spawner.must_spawn(buttons_reader(
-        p.PIN_16.into(),
-        p.PIN_17.into(),
-        BUTTON_CHANNEL.publisher().unwrap(),
-    ));
+    spawner.must_spawn(buttons_reader(keypad, BUTTON_CHANNEL.publisher().unwrap()));
 }
 
 /// This is the principal function that renders all the menu states
