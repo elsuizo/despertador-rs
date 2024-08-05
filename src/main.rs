@@ -24,22 +24,25 @@
 // TODO(elsuizo: 2024-07-25): put all the clock stuff in one file
 mod clock;
 use clock::Alarm;
+mod ui;
+use embassy_rp::rtc::DayOfWeek;
+use embassy_rp::rtc::{DateTime, Rtc};
 use keypad::embedded_hal::digital::v2::InputPin;
 use keypad::{keypad_new, keypad_struct};
+use ui::Msg;
 // use core::fmt::Write;
 // use defmt::write;
 // use core::fmt::Write;
-use core::convert::Infallible;
 // use core::fmt::Write;
 use defmt::info;
 // use defmt::*;
 use embassy_executor::Spawner;
-use embassy_futures::select::{select, select3, Either};
+// use embassy_futures::select::{select, select3, Either};
+use core::convert::Infallible;
 use embassy_rp::gpio::{AnyPin, Input, Level, Output, Pull};
 use embassy_rp::i2c::{self, Config};
 use embassy_rp::peripherals::I2C1;
 use embassy_rp::peripherals::RTC;
-use embassy_rp::rtc::{DateTime, DayOfWeek, Instance, Rtc};
 use embassy_sync::{
     blocking_mutex::raw::CriticalSectionRawMutex,
     pubsub::{PubSubChannel, Publisher, Subscriber},
@@ -56,6 +59,23 @@ use embedded_graphics::{
     prelude::*,
     text::Text,
 };
+
+keypad_struct! {
+    pub struct Keypad< Error = Infallible> {
+        rows: (
+            Input<'static, AnyPin>,
+            Input<'static, AnyPin>,
+            Input<'static, AnyPin>,
+            Input<'static, AnyPin>,
+        ),
+        columns: (
+            Output<'static, AnyPin>,
+            Output<'static, AnyPin>,
+            Output<'static, AnyPin>,
+            Output<'static, AnyPin>,
+        ),
+    }
+}
 
 type ChannelMutex = CriticalSectionRawMutex;
 
@@ -78,23 +98,6 @@ pub type ClockMessagePub = Pub<ClockMessageType, CLOCK_CHANNEL_NUM>;
 pub type ClockMessageSub = Sub<ClockMessageType, CLOCK_CHANNEL_NUM>;
 pub static CLOCK_STATE_CHANNEL: Ch<ClockMessageType, CLOCK_CHANNEL_NUM> = PubSubChannel::new();
 
-keypad_struct! {
-    pub struct Keypad< Error = Infallible> {
-        rows: (
-            Input<'static, AnyPin>,
-            Input<'static, AnyPin>,
-            Input<'static, AnyPin>,
-            Input<'static, AnyPin>,
-        ),
-        columns: (
-            Output<'static, AnyPin>,
-            Output<'static, AnyPin>,
-            Output<'static, AnyPin>,
-            Output<'static, AnyPin>,
-        ),
-    }
-}
-
 #[derive(Debug, Clone, Copy)]
 pub enum ClockState {
     Time,
@@ -102,12 +105,12 @@ pub enum ClockState {
     Image,
 }
 
-#[derive(Copy, Clone)]
-pub enum Msg {
-    Up,       // Up button
-    Down,     // Down button
-    Continue, // Continue in the actual state
-}
+// #[derive(Copy, Clone)]
+// pub enum Msg {
+//     Up,       // Up button
+//     Down,     // Down button
+//     Continue, // Continue in the actual state
+// }
 
 #[derive(Clone, Debug)]
 pub struct ClockFSM {
@@ -124,14 +127,18 @@ impl ClockFSM {
         use Msg::*;
 
         self.state = match (self.state, msg) {
-            (Time, Up) => Alarm,
+            (Time, A) => Alarm,
+            (Time, D) => Image,
             (Time, Continue) => Time,
-            (Alarm, Down) => Time,
-            (Alarm, Up) => Image,
+            (Time, _) => Time,
+            (Alarm, A) => Image,
+            (Alarm, D) => Time,
             (Alarm, Continue) => Alarm,
-            (Time, Down) => Image,
-            (Image, _) => Time,
-            // (Image, Continue) => Image,
+            (Alarm, _) => Alarm,
+            (Image, A) => Alarm,
+            (Image, D) => Time,
+            (Image, Continue) => Image,
+            (Image, _) => Image,
         }
     }
 }
@@ -139,7 +146,7 @@ impl ClockFSM {
 #[embassy_executor::task]
 pub async fn display(
     i2c: embassy_rp::i2c::I2c<'static, I2C1, embassy_rp::i2c::Blocking>,
-    alarm: &Alarm,
+    alarm: Alarm<'static, RTC>,
     mut clock_state_signal_in: ClockMessageSub,
 ) {
     let mut ticker = Ticker::every(Duration::from_millis(300));
@@ -155,7 +162,7 @@ pub async fn display(
     let logo_image = ImageRawLE::new(include_bytes!("../Images/rust.raw"), 64);
 
     loop {
-        let time = alarm.clock_read(&rtc);
+        let time = alarm.clock_read();
         match clock_state_signal_in.next_message_pure().await {
             ClockState::Time => {
                 Text::new(&time, Point::new(30, 13), normal).draw(&mut display);
@@ -175,26 +182,71 @@ pub async fn display(
 
 #[embassy_executor::task]
 pub async fn buttons_reader(keypad: Keypad, button_command: ButtonMessagePub) {
-    let mut ticker = Ticker::every(Duration::from_millis(30));
-    // info!("Hola desde la tarea buttons_tasks");
-    // let mut button2 = Input::new(button2, Pull::Up);
+    let mut ticker = Ticker::every(Duration::from_millis(10));
     button_command.publish_immediate(Msg::Continue);
     let keys = keypad.decompose();
+
+    // NOTE(elsuizo: 2024-08-05): esto es al pedo me parece...
+    // let mut map: LinearMap<(usize, usize), Msg, 16> = LinearMap::new();
+    // for (row_index, row) in keys.iter().enumerate() {
+    //     for (col_index, _key) in row.iter().enumerate() {
+    //         // info!("Pressed: ({}, {})", row_index, col_index);
+    //         let indexs = (row_index, col_index);
+    //         match indexs {
+    //             (0, 0) => map.insert(indexs, Msg::One).unwrap(),
+    //             (0, 1) => map.insert(indexs, Msg::Two).unwrap(),
+    //             (0, 2) => map.insert(indexs, Msg::Three).unwrap(),
+    //             (0, 3) => map.insert(indexs, Msg::A).unwrap(),
+    //             (1, 0) => map.insert(indexs, Msg::Four).unwrap(),
+    //             (1, 1) => map.insert(indexs, Msg::Five).unwrap(),
+    //             (1, 2) => map.insert(indexs, Msg::Six).unwrap(),
+    //             (1, 3) => map.insert(indexs, Msg::B).unwrap(),
+    //             (2, 0) => map.insert(indexs, Msg::Seven).unwrap(),
+    //             (2, 1) => map.insert(indexs, Msg::Eight).unwrap(),
+    //             (2, 2) => map.insert(indexs, Msg::Nine).unwrap(),
+    //             (2, 3) => map.insert(indexs, Msg::C).unwrap(),
+    //             (3, 0) => map.insert(indexs, Msg::Asterisk).unwrap(),
+    //             (3, 1) => map.insert(indexs, Msg::Zero).unwrap(),
+    //             (3, 2) => map.insert(indexs, Msg::Numeral).unwrap(),
+    //             (3, 3) => map.insert(indexs, Msg::D).unwrap(),
+    //             (_, _) => panic!("Nooo"),
+    //         };
+    //     }
+    // }
 
     // let first_key = &keys[0][0];
     loop {
         for (row_index, row) in keys.iter().enumerate() {
             for (col_index, key) in row.iter().enumerate() {
                 if key.is_low().unwrap() {
-                    button_command.publish_immediate(Msg::Up);
-                    info!("Pressed: ({}, {})", row_index, col_index);
+                    // let button_pressed = map.get(&(row_index, col_index));
+                    // button_command.publish_immediate(*button_pressed.unwrap());
+                    match (row_index, col_index) {
+                        (0, 0) => button_command.publish_immediate(Msg::One),
+                        (0, 1) => button_command.publish_immediate(Msg::Two),
+                        (0, 2) => {
+                            let msg = Msg::Three;
+                            button_command.publish_immediate(msg);
+                            info!("mensaje: {}", msg);
+                        }
+                        (0, 3) => button_command.publish_immediate(Msg::A),
+                        (1, 0) => button_command.publish_immediate(Msg::Four),
+                        (1, 1) => button_command.publish_immediate(Msg::Five),
+                        (1, 2) => button_command.publish_immediate(Msg::Six),
+                        (1, 3) => button_command.publish_immediate(Msg::B),
+                        (2, 0) => button_command.publish_immediate(Msg::Seven),
+                        (2, 1) => button_command.publish_immediate(Msg::Eight),
+                        (2, 2) => button_command.publish_immediate(Msg::Nine),
+                        (2, 3) => button_command.publish_immediate(Msg::C),
+                        (3, 0) => button_command.publish_immediate(Msg::Asterisk),
+                        (3, 1) => button_command.publish_immediate(Msg::Zero),
+                        (3, 2) => button_command.publish_immediate(Msg::Numeral),
+                        (3, 3) => button_command.publish_immediate(Msg::D),
+                        (_, _) => panic!("Nooo"),
+                    }
                 }
             }
         }
-        // match select(button1.wait_for_low(), button2.wait_for_low()).await {
-        //     Either::First(_) => button_command.publish_immediate(Msg::Up),
-        //     Either::Second(_) => button_command.publish_immediate(Msg::Down),
-        // }
         button_command.publish(Msg::Continue).await;
         ticker.next().await;
     }
@@ -246,7 +298,7 @@ async fn main(spawner: Spawner) {
 
     let i2c = i2c::I2c::new_blocking(p.I2C1, scl, sda, Config::default());
 
-    let mut rtc = Rtc::new(p.RTC);
+    let rtc = Rtc::new(p.RTC);
 
     // let mut display: GraphicsMode<_> = Builder::new().connect_i2c(i2c).into();
 
@@ -266,8 +318,7 @@ async fn main(spawner: Spawner) {
         minute: 17,
         second: 0,
     };
-    let mut alarm = Alarm::new(now, &mut rtc);
-    // rtc.set_datetime(now).unwrap();
+    let alarm = Alarm::new(now, rtc);
 
     let normal = MonoTextStyleBuilder::new()
         .font(&FONT_10X20)
@@ -278,7 +329,11 @@ async fn main(spawner: Spawner) {
         BUTTON_CHANNEL.subscriber().unwrap(),
         CLOCK_STATE_CHANNEL.publisher().unwrap(),
     ));
-    // spawner.must_spawn(display(i2c, rtc, CLOCK_STATE_CHANNEL.subscriber().unwrap()));
+    spawner.must_spawn(display(
+        i2c,
+        alarm,
+        CLOCK_STATE_CHANNEL.subscriber().unwrap(),
+    ));
     spawner.must_spawn(buttons_reader(keypad, BUTTON_CHANNEL.publisher().unwrap()));
 }
 
