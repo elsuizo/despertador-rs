@@ -22,15 +22,15 @@
 #![no_std]
 #![no_main]
 // TODO(elsuizo: 2024-07-25): put all the clock stuff in one file
-// mod clock;
-// use clock::clock_update;
+mod clock;
+use clock::Alarm;
 use keypad::embedded_hal::digital::v2::InputPin;
 use keypad::{keypad_new, keypad_struct};
 // use core::fmt::Write;
 // use defmt::write;
 // use core::fmt::Write;
 use core::convert::Infallible;
-use core::fmt::Write;
+// use core::fmt::Write;
 use defmt::info;
 // use defmt::*;
 use embassy_executor::Spawner;
@@ -139,7 +139,7 @@ impl ClockFSM {
 #[embassy_executor::task]
 pub async fn display(
     i2c: embassy_rp::i2c::I2c<'static, I2C1, embassy_rp::i2c::Blocking>,
-    rtc: embassy_rp::rtc::Rtc<'static, RTC>,
+    alarm: &Alarm,
     mut clock_state_signal_in: ClockMessageSub,
 ) {
     let mut ticker = Ticker::every(Duration::from_millis(300));
@@ -155,7 +155,7 @@ pub async fn display(
     let logo_image = ImageRawLE::new(include_bytes!("../Images/rust.raw"), 64);
 
     loop {
-        let time = clock_read(&rtc);
+        let time = alarm.clock_read(&rtc);
         match clock_state_signal_in.next_message_pure().await {
             ClockState::Time => {
                 Text::new(&time, Point::new(30, 13), normal).draw(&mut display);
@@ -171,21 +171,6 @@ pub async fn display(
         display.clear();
         ticker.next().await;
     }
-}
-
-fn clock_read<'r, T: Instance + 'r>(rtc: &Rtc<'r, T>) -> String<256> {
-    let mut time: String<256> = String::new();
-    if let Ok(dt) = rtc.now() {
-        write!(
-            &mut time,
-            "{:02}:{:02}:{:02}\n{:}-{:}-{:}\n{:?}",
-            dt.hour, dt.minute, dt.second, dt.day, dt.month, dt.year, dt.day_of_week
-        )
-        .unwrap();
-    } else {
-        info!("The RTC is not working ...")
-    }
-    time
 }
 
 #[embassy_executor::task]
@@ -281,7 +266,8 @@ async fn main(spawner: Spawner) {
         minute: 17,
         second: 0,
     };
-    rtc.set_datetime(now).unwrap();
+    let mut alarm = Alarm::new(now, &mut rtc);
+    // rtc.set_datetime(now).unwrap();
 
     let normal = MonoTextStyleBuilder::new()
         .font(&FONT_10X20)
@@ -292,7 +278,7 @@ async fn main(spawner: Spawner) {
         BUTTON_CHANNEL.subscriber().unwrap(),
         CLOCK_STATE_CHANNEL.publisher().unwrap(),
     ));
-    spawner.must_spawn(display(i2c, rtc, CLOCK_STATE_CHANNEL.subscriber().unwrap()));
+    // spawner.must_spawn(display(i2c, rtc, CLOCK_STATE_CHANNEL.subscriber().unwrap()));
     spawner.must_spawn(buttons_reader(keypad, BUTTON_CHANNEL.publisher().unwrap()));
 }
 
