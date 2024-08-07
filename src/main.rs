@@ -23,7 +23,8 @@
 #![no_main]
 // TODO(elsuizo: 2024-07-25): put all the clock stuff in one file
 mod clock;
-use clock::Alarm;
+use clock::Clock;
+use clock::{ClockFSM, ClockState};
 mod ui;
 use embassy_rp::rtc::DayOfWeek;
 use embassy_rp::rtc::{DateTime, Rtc};
@@ -98,58 +99,13 @@ pub type ClockMessagePub = Pub<ClockMessageType, CLOCK_CHANNEL_NUM>;
 pub type ClockMessageSub = Sub<ClockMessageType, CLOCK_CHANNEL_NUM>;
 pub static CLOCK_STATE_CHANNEL: Ch<ClockMessageType, CLOCK_CHANNEL_NUM> = PubSubChannel::new();
 
-#[derive(Debug, Clone, Copy)]
-pub enum ClockState {
-    Time,
-    Alarm,
-    Image,
-}
-
-// #[derive(Copy, Clone)]
-// pub enum Msg {
-//     Up,       // Up button
-//     Down,     // Down button
-//     Continue, // Continue in the actual state
-// }
-
-#[derive(Clone, Debug)]
-pub struct ClockFSM {
-    pub state: ClockState,
-}
-
-impl ClockFSM {
-    pub fn init(state: ClockState) -> Self {
-        Self { state }
-    }
-
-    pub fn next_state(&mut self, msg: Msg) {
-        use ClockState::*;
-        use Msg::*;
-
-        self.state = match (self.state, msg) {
-            (Time, A) => Alarm,
-            (Time, D) => Image,
-            (Time, Continue) => Time,
-            (Time, _) => Time,
-            (Alarm, A) => Image,
-            (Alarm, D) => Time,
-            (Alarm, Continue) => Alarm,
-            (Alarm, _) => Alarm,
-            (Image, A) => Alarm,
-            (Image, D) => Time,
-            (Image, Continue) => Image,
-            (Image, _) => Image,
-        }
-    }
-}
-
 #[embassy_executor::task]
 pub async fn display(
     i2c: embassy_rp::i2c::I2c<'static, I2C1, embassy_rp::i2c::Blocking>,
-    alarm: Alarm<'static, RTC>,
+    clock: Clock<'static, RTC>,
     mut clock_state_signal_in: ClockMessageSub,
 ) {
-    let mut ticker = Ticker::every(Duration::from_millis(300));
+    let mut ticker = Ticker::every(Duration::from_millis(100));
     let mut display: GraphicsMode<_> = Builder::new().connect_i2c(i2c).into();
     display.init().ok();
     display.flush().ok();
@@ -162,7 +118,7 @@ pub async fn display(
     let logo_image = ImageRawLE::new(include_bytes!("../Images/rust.raw"), 64);
 
     loop {
-        let time = alarm.clock_read();
+        let time = clock.read();
         match clock_state_signal_in.next_message_pure().await {
             ClockState::Time => {
                 Text::new(&time, Point::new(30, 13), normal).draw(&mut display);
@@ -300,11 +256,7 @@ async fn main(spawner: Spawner) {
 
     let rtc = Rtc::new(p.RTC);
 
-    // let mut display: GraphicsMode<_> = Builder::new().connect_i2c(i2c).into();
-
     led.set_high();
-    // display.init().ok();
-    // display.flush().ok();
     //-------------------------------------------------------------------------
     //                        rtc init
     //-------------------------------------------------------------------------
@@ -318,9 +270,10 @@ async fn main(spawner: Spawner) {
         minute: 17,
         second: 0,
     };
-    let alarm = Alarm::new(now, rtc);
 
-    let normal = MonoTextStyleBuilder::new()
+    let clock = Clock::new(now, rtc).expect("Error creating the clock type");
+
+    let _normal = MonoTextStyleBuilder::new()
         .font(&FONT_10X20)
         .text_color(BinaryColor::On)
         .build();
@@ -331,7 +284,7 @@ async fn main(spawner: Spawner) {
     ));
     spawner.must_spawn(display(
         i2c,
-        alarm,
+        clock,
         CLOCK_STATE_CHANNEL.subscriber().unwrap(),
     ));
     spawner.must_spawn(buttons_reader(keypad, BUTTON_CHANNEL.publisher().unwrap()));

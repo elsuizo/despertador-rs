@@ -6,6 +6,8 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+serde = { version = "1.0.*", default-features = false }
+postcard = "1.0.8"
 keypad = "0.2.2"
 embassy-embedded-hal = { version = "0.1.0", features = ["defmt"] }
 embassy-sync = { version = "0.6.0", features = ["defmt"] }
