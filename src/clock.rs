@@ -11,14 +11,8 @@ pub enum ClockState {
     Time,
     Alarm,
     Image,
+    // Menu,
 }
-
-// #[derive(Copy, Clone)]
-// pub enum Msg {
-//     Up,       // Up button
-//     Down,     // Down button
-//     Continue, // Continue in the actual state
-// }
 
 #[derive(Clone, Debug)]
 pub struct ClockFSM {
@@ -57,18 +51,15 @@ pub struct ClockFromPc<'a> {
 }
 
 pub struct Clock<'r, T: Instance> {
-    now: DateTime,
     rtc: Rtc<'r, T>,
     alarm: Option<DateTime>,
     periodic: bool,
 }
 
 impl<'r, T: Instance + 'r> Clock<'r, T> {
-    pub fn new(actual_time: DateTime, mut rtc: Rtc<'static, T>) -> Result<Self, RtcError> {
-        let now = rtc.now()?;
-        rtc.set_datetime(actual_time)?;
+    pub fn new(user_time_set: DateTime, mut rtc: Rtc<'static, T>) -> Result<Self, RtcError> {
+        rtc.set_datetime(user_time_set)?;
         Ok(Self {
-            now,
             rtc,
             alarm: None,
             periodic: false,

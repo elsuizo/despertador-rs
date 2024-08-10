@@ -49,18 +49,19 @@ use embassy_sync::{
     pubsub::{PubSubChannel, Publisher, Subscriber},
 };
 use embassy_time::{Duration, Ticker};
-use heapless::{LinearMap, String};
+use heapless::String;
 use sh1106::{prelude::*, Builder};
 use {defmt_rtt as _, panic_probe as _};
 
 use embedded_graphics::{
     image::{Image, ImageRawLE},
-    mono_font::{ascii::FONT_10X20, ascii::FONT_9X15, MonoTextStyleBuilder},
+    mono_font::{ascii::FONT_9X15, MonoTextStyleBuilder},
     pixelcolor::BinaryColor,
     prelude::*,
     text::Text,
 };
 
+// TODO(elsuizo: 2024-08-09): ver como podemos sacar esto de aca ...
 keypad_struct! {
     pub struct Keypad< Error = Infallible> {
         rows: (
@@ -100,11 +101,12 @@ pub type ClockMessageSub = Sub<ClockMessageType, CLOCK_CHANNEL_NUM>;
 pub static CLOCK_STATE_CHANNEL: Ch<ClockMessageType, CLOCK_CHANNEL_NUM> = PubSubChannel::new();
 
 #[embassy_executor::task]
-pub async fn display(
+pub async fn show_display_states(
     i2c: embassy_rp::i2c::I2c<'static, I2C1, embassy_rp::i2c::Blocking>,
     clock: Clock<'static, RTC>,
     mut clock_state_signal_in: ClockMessageSub,
 ) {
+    // TODO(elsuizo: 2024-08-09): is that time ok???
     let mut ticker = Ticker::every(Duration::from_millis(100));
     let mut display: GraphicsMode<_> = Builder::new().connect_i2c(i2c).into();
     display.init().ok();
@@ -183,7 +185,7 @@ pub async fn buttons_reader(keypad: Keypad, button_command: ButtonMessagePub) {
                         (0, 2) => {
                             let msg = Msg::Three;
                             button_command.publish_immediate(msg);
-                            info!("mensaje: {}", msg);
+                            info!("message: {}", msg);
                         }
                         (0, 3) => button_command.publish_immediate(Msg::A),
                         (1, 0) => button_command.publish_immediate(Msg::Four),
@@ -263,48 +265,24 @@ async fn main(spawner: Spawner) {
     info!("Start RTC");
     let now = DateTime {
         year: 2024,
-        month: 7,
-        day: 29,
-        day_of_week: DayOfWeek::Monday,
-        hour: 11,
-        minute: 17,
+        month: 8,
+        day: 8,
+        day_of_week: DayOfWeek::Friday,
+        hour: 8,
+        minute: 49,
         second: 0,
     };
 
     let clock = Clock::new(now, rtc).expect("Error creating the clock type");
 
-    let _normal = MonoTextStyleBuilder::new()
-        .font(&FONT_10X20)
-        .text_color(BinaryColor::On)
-        .build();
-
     spawner.must_spawn(clock_controller(
         BUTTON_CHANNEL.subscriber().unwrap(),
         CLOCK_STATE_CHANNEL.publisher().unwrap(),
     ));
-    spawner.must_spawn(display(
+    spawner.must_spawn(show_display_states(
         i2c,
         clock,
         CLOCK_STATE_CHANNEL.subscriber().unwrap(),
     ));
     spawner.must_spawn(buttons_reader(keypad, BUTTON_CHANNEL.publisher().unwrap()));
-}
-
-/// This is the principal function that renders all the menu states
-pub fn draw_menu<D>(target: &mut D) -> Result<(), D::Error>
-where
-    D: DrawTarget<Color = BinaryColor>,
-{
-    // normal text
-    let normal = MonoTextStyleBuilder::new()
-        .font(&FONT_9X15)
-        .text_color(BinaryColor::On)
-        .build();
-    // text with background
-    // let background = MonoTextStyleBuilder::from(&normal)
-    //     .background_color(BinaryColor::On)
-    //     .text_color(BinaryColor::Off)
-    //     .build();
-
-    Ok(())
 }
