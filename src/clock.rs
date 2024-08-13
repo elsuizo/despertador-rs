@@ -8,10 +8,13 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy)]
 pub enum ClockState {
-    Time,
-    Alarm,
-    Image,
-    // Menu,
+    DisplayTime,
+    SetTime,
+    DisplayAlarm,
+    SetAlarm,
+    ShowImage,
+    Menu(bool, bool, bool), // menu rows
+                            // Menu,
 }
 
 #[derive(Clone, Debug)]
@@ -29,18 +32,32 @@ impl ClockFSM {
         use Msg::*;
 
         self.state = match (self.state, msg) {
-            (Time, A) => Alarm,
-            (Time, D) => Image,
-            (Time, Continue) => Time,
-            (Time, _) => Time,
-            (Alarm, A) => Image,
-            (Alarm, D) => Time,
-            (Alarm, Continue) => Alarm,
-            (Alarm, _) => Alarm,
-            (Image, A) => Alarm,
-            (Image, D) => Time,
-            (Image, Continue) => Image,
-            (Image, _) => Image,
+            (DisplayTime, A) => DisplayAlarm,
+            (DisplayTime, Asterisk) => SetTime,
+            (DisplayTime, Continue) => DisplayTime,
+            (DisplayTime, Numeral) => ShowImage,
+            (ShowImage, Continue) => ShowImage,
+            (DisplayTime, B) => Menu(false, false, false),
+            (DisplayTime, _) => DisplayTime, // any other keys
+            // up
+            (Menu(true, false, false), A) => Menu(false, false, true),
+            (Menu(true, false, false), Continue) => Menu(true, false, false),
+
+            (Menu(false, true, false), A) => Menu(true, false, false),
+            (Menu(false, true, false), Continue) => Menu(false, true, false),
+
+            (Menu(false, false, true), A) => Menu(false, true, false),
+            (Menu(false, false, true), Continue) => Menu(false, false, true),
+            // down
+            (Menu(true, false, false), D) => Menu(false, true, false),
+
+            (Menu(false, true, false), D) => Menu(false, false, true),
+            (Menu(false, false, true), D) => Menu(true, false, false),
+
+            (Menu(false, false, false), Continue) => Menu(false, false, false),
+            (Menu(false, false, false), A) => Menu(true, false, false),
+            (Menu(false, false, false), D) => Menu(false, false, true),
+            (_, _) => DisplayTime,
         }
     }
 }

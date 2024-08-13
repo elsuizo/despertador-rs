@@ -26,16 +26,12 @@ mod clock;
 use clock::Clock;
 use clock::{ClockFSM, ClockState};
 mod ui;
+use defmt::info;
 use embassy_rp::rtc::DayOfWeek;
 use embassy_rp::rtc::{DateTime, Rtc};
 use keypad::embedded_hal::digital::v2::InputPin;
 use keypad::{keypad_new, keypad_struct};
 use ui::Msg;
-// use core::fmt::Write;
-// use defmt::write;
-// use core::fmt::Write;
-// use core::fmt::Write;
-use defmt::info;
 // use defmt::*;
 use embassy_executor::Spawner;
 // use embassy_futures::select::{select, select3, Either};
@@ -117,19 +113,60 @@ pub async fn show_display_states(
         .text_color(BinaryColor::On)
         .build();
 
+    let background = MonoTextStyleBuilder::from(&normal)
+        .background_color(BinaryColor::On)
+        .text_color(BinaryColor::Off)
+        .build();
+
     let logo_image = ImageRawLE::new(include_bytes!("../Images/rust.raw"), 64);
 
     loop {
         let time = clock.read();
         match clock_state_signal_in.next_message_pure().await {
-            ClockState::Time => {
+            ClockState::DisplayTime => {
                 Text::new(&time, Point::new(30, 13), normal).draw(&mut display);
             }
-            ClockState::Image => {
+            ClockState::ShowImage => {
                 Image::new(&logo_image, Point::new(32, 0)).draw(&mut display);
             }
-            ClockState::Alarm => {
-                Text::new("Alarm!!!", Point::new(37, 13), normal).draw(&mut display);
+            // TODO(elsuizo: 2024-08-13): here should display the alarm date...
+            ClockState::DisplayAlarm => {
+                let _ = Text::new("Alarm!!!", Point::new(37, 13), normal).draw(&mut display);
+            }
+            // show the display menus
+            ClockState::Menu(true, false, false) => {
+                let _ = Text::new("Set Time", Point::new(10, 13), background).draw(&mut display);
+                let _ = Text::new("Set Alarm", Point::new(10, 13 + 20), normal).draw(&mut display);
+                let _ = Text::new("Test sound", Point::new(10, 13 + 20 + 20), normal)
+                    .draw(&mut display);
+            }
+            ClockState::Menu(false, true, false) => {
+                let _ = Text::new("Set Time", Point::new(10, 13), normal).draw(&mut display);
+                let _ =
+                    Text::new("Set Alarm", Point::new(10, 13 + 20), background).draw(&mut display);
+                let _ = Text::new("Test sound", Point::new(10, 13 + 20 + 20), normal)
+                    .draw(&mut display);
+            }
+            ClockState::Menu(false, false, true) => {
+                let _ = Text::new("Set Time", Point::new(10, 13), normal).draw(&mut display);
+                let _ = Text::new("Set Alarm", Point::new(10, 13 + 20), normal).draw(&mut display);
+                let _ = Text::new("Test sound", Point::new(10, 13 + 20 + 20), background)
+                    .draw(&mut display);
+            }
+            ClockState::Menu(false, false, false) => {
+                let _ = Text::new("Set Time", Point::new(10, 13), normal).draw(&mut display);
+                let _ = Text::new("Set Alarm", Point::new(10, 13 + 20), normal).draw(&mut display);
+                let _ = Text::new("Test sound", Point::new(10, 13 + 20 + 20), normal)
+                    .draw(&mut display);
+            }
+            ClockState::Menu(_, _, _) => panic!("invalid state!!!"),
+            ClockState::SetTime => {
+                let _ = Text::new("Settime under construction!!!", Point::new(37, 13), normal)
+                    .draw(&mut display);
+            }
+            ClockState::SetAlarm => {
+                let _ = Text::new("SetAlarm under construction!!!", Point::new(37, 13), normal)
+                    .draw(&mut display);
             }
         }
         display.flush().ok();
@@ -143,34 +180,6 @@ pub async fn buttons_reader(keypad: Keypad, button_command: ButtonMessagePub) {
     let mut ticker = Ticker::every(Duration::from_millis(10));
     button_command.publish_immediate(Msg::Continue);
     let keys = keypad.decompose();
-
-    // NOTE(elsuizo: 2024-08-05): esto es al pedo me parece...
-    // let mut map: LinearMap<(usize, usize), Msg, 16> = LinearMap::new();
-    // for (row_index, row) in keys.iter().enumerate() {
-    //     for (col_index, _key) in row.iter().enumerate() {
-    //         // info!("Pressed: ({}, {})", row_index, col_index);
-    //         let indexs = (row_index, col_index);
-    //         match indexs {
-    //             (0, 0) => map.insert(indexs, Msg::One).unwrap(),
-    //             (0, 1) => map.insert(indexs, Msg::Two).unwrap(),
-    //             (0, 2) => map.insert(indexs, Msg::Three).unwrap(),
-    //             (0, 3) => map.insert(indexs, Msg::A).unwrap(),
-    //             (1, 0) => map.insert(indexs, Msg::Four).unwrap(),
-    //             (1, 1) => map.insert(indexs, Msg::Five).unwrap(),
-    //             (1, 2) => map.insert(indexs, Msg::Six).unwrap(),
-    //             (1, 3) => map.insert(indexs, Msg::B).unwrap(),
-    //             (2, 0) => map.insert(indexs, Msg::Seven).unwrap(),
-    //             (2, 1) => map.insert(indexs, Msg::Eight).unwrap(),
-    //             (2, 2) => map.insert(indexs, Msg::Nine).unwrap(),
-    //             (2, 3) => map.insert(indexs, Msg::C).unwrap(),
-    //             (3, 0) => map.insert(indexs, Msg::Asterisk).unwrap(),
-    //             (3, 1) => map.insert(indexs, Msg::Zero).unwrap(),
-    //             (3, 2) => map.insert(indexs, Msg::Numeral).unwrap(),
-    //             (3, 3) => map.insert(indexs, Msg::D).unwrap(),
-    //             (_, _) => panic!("Nooo"),
-    //         };
-    //     }
-    // }
 
     // let first_key = &keys[0][0];
     loop {
@@ -205,7 +214,7 @@ pub async fn buttons_reader(keypad: Keypad, button_command: ButtonMessagePub) {
                 }
             }
         }
-        button_command.publish(Msg::Continue).await;
+        button_command.publish(Msg::Continue).await; // no button was pressed
         ticker.next().await;
     }
 }
@@ -218,7 +227,7 @@ pub async fn clock_controller(
     clock_state_signal_out: ClockMessagePub,
 ) {
     let mut ticker = Ticker::every(Duration::from_millis(30));
-    let mut clock_fsm = ClockFSM::init(ClockState::Time);
+    let mut clock_fsm = ClockFSM::init(ClockState::DisplayTime);
 
     loop {
         let message = button_command_input.next_message_pure().await;

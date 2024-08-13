@@ -58,13 +58,13 @@ pub enum Msg {
     Continue, // Continue in the actual state
 }
 
-pub enum DisplayStates {
-    DisplayTime,
-    SetTime,
-    DisplayAlarm,
-    SetAlarm,
-    Menu(bool, bool, bool), // menu rows
-}
+// pub enum DisplayStates {
+//     DisplayTime,
+//     SetTime,
+//     DisplayAlarm,
+//     SetAlarm,
+//     Menu(bool, bool, bool), // menu rows
+// }
 
 // pub fn show_display_state<D>(target: &mut D, state: DisplayStates) -> Result<(), D::Error>
 // where
