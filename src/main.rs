@@ -31,7 +31,7 @@ use embassy_rp::rtc::DayOfWeek;
 use embassy_rp::rtc::{DateTime, Rtc};
 use keypad::embedded_hal::digital::v2::InputPin;
 use keypad::{keypad_new, keypad_struct};
-use ui::Msg;
+use ui::{show_menu, Msg};
 // use defmt::*;
 use embassy_executor::Spawner;
 // use embassy_futures::select::{select, select3, Either};
@@ -120,46 +120,24 @@ pub async fn show_display_states(
 
     let logo_image = ImageRawLE::new(include_bytes!("../Images/rust.raw"), 64);
 
+    // TODO(elsuizo: 2024-08-13): this menus items should be a function...
     loop {
         let time = clock.read();
         match clock_state_signal_in.next_message_pure().await {
             ClockState::DisplayTime => {
-                Text::new(&time, Point::new(30, 13), normal).draw(&mut display);
+                let _ = Text::new(&time, Point::new(30, 13), normal).draw(&mut display);
             }
             ClockState::ShowImage => {
-                Image::new(&logo_image, Point::new(32, 0)).draw(&mut display);
+                let _ = Image::new(&logo_image, Point::new(32, 0)).draw(&mut display);
             }
             // TODO(elsuizo: 2024-08-13): here should display the alarm date...
             ClockState::DisplayAlarm => {
                 let _ = Text::new("Alarm!!!", Point::new(37, 13), normal).draw(&mut display);
             }
             // show the display menus
-            ClockState::Menu(true, false, false) => {
-                let _ = Text::new("Set Time", Point::new(10, 13), background).draw(&mut display);
-                let _ = Text::new("Set Alarm", Point::new(10, 13 + 20), normal).draw(&mut display);
-                let _ = Text::new("Test sound", Point::new(10, 13 + 20 + 20), normal)
-                    .draw(&mut display);
+            ClockState::Menu(a, b, c) => {
+                show_menu(&mut display, (a, b, c)).expect("no se pudo mostrar ese estado");
             }
-            ClockState::Menu(false, true, false) => {
-                let _ = Text::new("Set Time", Point::new(10, 13), normal).draw(&mut display);
-                let _ =
-                    Text::new("Set Alarm", Point::new(10, 13 + 20), background).draw(&mut display);
-                let _ = Text::new("Test sound", Point::new(10, 13 + 20 + 20), normal)
-                    .draw(&mut display);
-            }
-            ClockState::Menu(false, false, true) => {
-                let _ = Text::new("Set Time", Point::new(10, 13), normal).draw(&mut display);
-                let _ = Text::new("Set Alarm", Point::new(10, 13 + 20), normal).draw(&mut display);
-                let _ = Text::new("Test sound", Point::new(10, 13 + 20 + 20), background)
-                    .draw(&mut display);
-            }
-            ClockState::Menu(false, false, false) => {
-                let _ = Text::new("Set Time", Point::new(10, 13), normal).draw(&mut display);
-                let _ = Text::new("Set Alarm", Point::new(10, 13 + 20), normal).draw(&mut display);
-                let _ = Text::new("Test sound", Point::new(10, 13 + 20 + 20), normal)
-                    .draw(&mut display);
-            }
-            ClockState::Menu(_, _, _) => panic!("invalid state!!!"),
             ClockState::SetTime => {
                 let _ = Text::new("Settime under construction!!!", Point::new(37, 13), normal)
                     .draw(&mut display);
@@ -176,7 +154,7 @@ pub async fn show_display_states(
 }
 
 #[embassy_executor::task]
-pub async fn buttons_reader(keypad: Keypad, button_command: ButtonMessagePub) {
+pub async fn keypad2msg(keypad: Keypad, button_command: ButtonMessagePub) {
     let mut ticker = Ticker::every(Duration::from_millis(10));
     button_command.publish_immediate(Msg::Continue);
     let keys = keypad.decompose();
@@ -275,10 +253,10 @@ async fn main(spawner: Spawner) {
     let now = DateTime {
         year: 2024,
         month: 8,
-        day: 8,
-        day_of_week: DayOfWeek::Friday,
-        hour: 8,
-        minute: 49,
+        day: 15,
+        day_of_week: DayOfWeek::Thursday,
+        hour: 9,
+        minute: 23,
         second: 0,
     };
 
@@ -293,5 +271,5 @@ async fn main(spawner: Spawner) {
         clock,
         CLOCK_STATE_CHANNEL.subscriber().unwrap(),
     ));
-    spawner.must_spawn(buttons_reader(keypad, BUTTON_CHANNEL.publisher().unwrap()));
+    spawner.must_spawn(keypad2msg(keypad, BUTTON_CHANNEL.publisher().unwrap()));
 }

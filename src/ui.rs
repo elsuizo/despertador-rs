@@ -58,31 +58,43 @@ pub enum Msg {
     Continue, // Continue in the actual state
 }
 
-// pub enum DisplayStates {
-//     DisplayTime,
-//     SetTime,
-//     DisplayAlarm,
-//     SetAlarm,
-//     Menu(bool, bool, bool), // menu rows
-// }
+pub fn show_menu<D>(target: &mut D, state: (bool, bool, bool)) -> Result<(), D::Error>
+where
+    D: DrawTarget<Color = BinaryColor>,
+{
+    // normal text
+    let normal = MonoTextStyleBuilder::new()
+        .font(&FONT_9X15)
+        .text_color(BinaryColor::On)
+        .build();
+    // text with background
+    let background = MonoTextStyleBuilder::from(&normal)
+        .background_color(BinaryColor::On)
+        .text_color(BinaryColor::Off)
+        .build();
 
-// pub fn show_display_state<D>(target: &mut D, state: DisplayStates) -> Result<(), D::Error>
-// where
-//     D: DrawTarget<Color = BinaryColor>,
-// {
-//     // normal text
-//     let normal = MonoTextStyleBuilder::new()
-//         .font(&FONT_9X15)
-//         .text_color(BinaryColor::On)
-//         .build();
-//     // text with background
-//     let background = MonoTextStyleBuilder::from(&normal)
-//         .background_color(BinaryColor::On)
-//         .text_color(BinaryColor::Off)
-//         .build();
-//     match state {
-//         DisplayStates::DisplayTime => {}
-//     }
-//
-//     Ok(())
-// }
+    match state {
+        (true, false, false) => {
+            let _ = Text::new("Set Time", Point::new(10, 13), background).draw(target);
+            let _ = Text::new("Set Alarm", Point::new(10, 13 + 20), normal).draw(target);
+            let _ = Text::new("Test sound", Point::new(10, 13 + 20 + 20), normal).draw(target);
+        }
+        (false, true, false) => {
+            let _ = Text::new("Set Time", Point::new(10, 13), normal).draw(target);
+            let _ = Text::new("Set Alarm", Point::new(10, 13 + 20), background).draw(target);
+            let _ = Text::new("Test sound", Point::new(10, 13 + 20 + 20), normal).draw(target);
+        }
+        (false, false, true) => {
+            let _ = Text::new("Set Time", Point::new(10, 13), normal).draw(target);
+            let _ = Text::new("Set Alarm", Point::new(10, 13 + 20), normal).draw(target);
+            let _ = Text::new("Test sound", Point::new(10, 13 + 20 + 20), background).draw(target);
+        }
+        (false, false, false) => {
+            let _ = Text::new("Set Time", Point::new(10, 13), normal).draw(target);
+            let _ = Text::new("Set Alarm", Point::new(10, 13 + 20), normal).draw(target);
+            let _ = Text::new("Test sound", Point::new(10, 13 + 20 + 20), normal).draw(target);
+        }
+        (_, _, _) => panic!("invalid display state"),
+    }
+    Ok(())
+}
