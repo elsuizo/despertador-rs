@@ -28,7 +28,7 @@ use clock::{ClockFSM, ClockState};
 mod ui;
 use defmt::info;
 use embassy_rp::rtc::DayOfWeek;
-use embassy_rp::rtc::{DateTime, Rtc};
+use embassy_rp::rtc::{DateTime, DateTimeFilter, Rtc};
 use keypad::embedded_hal::digital::v2::InputPin;
 use keypad::{keypad_new, keypad_struct};
 use ui::{show_menu, Msg};
@@ -44,7 +44,7 @@ use embassy_sync::{
     blocking_mutex::raw::CriticalSectionRawMutex,
     pubsub::{PubSubChannel, Publisher, Subscriber},
 };
-use embassy_time::{Duration, Ticker};
+use embassy_time::{Duration, Ticker, Timer};
 use heapless::String;
 use sh1106::{prelude::*, Builder};
 use {defmt_rtt as _, panic_probe as _};
@@ -61,16 +61,16 @@ use embedded_graphics::{
 keypad_struct! {
     pub struct Keypad< Error = Infallible> {
         rows: (
-            Input<'static, AnyPin>,
-            Input<'static, AnyPin>,
-            Input<'static, AnyPin>,
-            Input<'static, AnyPin>,
+            Input<'static>,
+            Input<'static>,
+            Input<'static>,
+            Input<'static>,
         ),
         columns: (
-            Output<'static, AnyPin>,
-            Output<'static, AnyPin>,
-            Output<'static, AnyPin>,
-            Output<'static, AnyPin>,
+            Output<'static>,
+            Output<'static>,
+            Output<'static>,
+            Output<'static>,
         ),
     }
 }
@@ -96,15 +96,33 @@ pub type ClockMessagePub = Pub<ClockMessageType, CLOCK_CHANNEL_NUM>;
 pub type ClockMessageSub = Sub<ClockMessageType, CLOCK_CHANNEL_NUM>;
 pub static CLOCK_STATE_CHANNEL: Ch<ClockMessageType, CLOCK_CHANNEL_NUM> = PubSubChannel::new();
 
+pub async fn alarm_sound_test<'a>(buzzer: &'a mut Output<'static>) {
+    // TODO(elsuizo: 2024-08-17): hacer que esto sea un sonido real de alarma
+    // quizas tambien tendriamos que hacer que sea infinita hasta que pase un evento
+    buzzer.set_high();
+    Timer::after(Duration::from_millis(300)).await;
+
+    buzzer.set_low();
+    Timer::after(Duration::from_millis(500)).await;
+
+    buzzer.set_high();
+    Timer::after(Duration::from_millis(100)).await;
+
+    buzzer.set_low();
+    Timer::after(Duration::from_millis(300)).await;
+}
+
 #[embassy_executor::task]
 pub async fn show_display_states(
     i2c: embassy_rp::i2c::I2c<'static, I2C1, embassy_rp::i2c::Blocking>,
     clock: Clock<'static, RTC>,
     mut clock_state_signal_in: ClockMessageSub,
+    buzzer_pin: AnyPin,
 ) {
     // TODO(elsuizo: 2024-08-09): is that time ok???
     let mut ticker = Ticker::every(Duration::from_millis(100));
     let mut display: GraphicsMode<_> = Builder::new().connect_i2c(i2c).into();
+    let mut buzzer = Output::new(buzzer_pin, Level::Low);
     display.init().ok();
     display.flush().ok();
 
@@ -113,7 +131,7 @@ pub async fn show_display_states(
         .text_color(BinaryColor::On)
         .build();
 
-    let background = MonoTextStyleBuilder::from(&normal)
+    let _background = MonoTextStyleBuilder::from(&normal)
         .background_color(BinaryColor::On)
         .text_color(BinaryColor::Off)
         .build();
@@ -138,6 +156,9 @@ pub async fn show_display_states(
             ClockState::Menu(a, b, c) => {
                 show_menu(&mut display, (a, b, c)).expect("no se pudo mostrar ese estado");
             }
+            ClockState::TestSound => {
+                alarm_sound_test(&mut buzzer).await;
+            }
             ClockState::SetTime => {
                 let _ = Text::new("Settime under construction!!!", Point::new(37, 13), normal)
                     .draw(&mut display);
@@ -153,6 +174,7 @@ pub async fn show_display_states(
     }
 }
 
+// NOTE(elsuizo: 2024-08-15): no anda la concha de tu madre
 #[embassy_executor::task]
 pub async fn keypad2msg(keypad: Keypad, button_command: ButtonMessagePub) {
     let mut ticker = Ticker::every(Duration::from_millis(10));
@@ -220,6 +242,7 @@ async fn main(spawner: Spawner) {
     info!("init program");
     let p = embassy_rp::init(Default::default());
     let mut led = Output::new(p.PIN_25, Level::Low);
+    let buzzer = AnyPin::from(p.PIN_8);
     let keypad = keypad_new!(Keypad {
         rows: (
             Input::new(AnyPin::from(p.PIN_0), Pull::Up),
@@ -251,16 +274,27 @@ async fn main(spawner: Spawner) {
     //-------------------------------------------------------------------------
     info!("Start RTC");
     let now = DateTime {
-        year: 2024,
-        month: 8,
-        day: 15,
-        day_of_week: DayOfWeek::Thursday,
-        hour: 9,
-        minute: 23,
+        year: 2025,
+        month: 2,
+        day: 5,
+        day_of_week: DayOfWeek::Wednesday,
+        hour: 14,
+        minute: 5,
         second: 0,
     };
 
-    let clock = Clock::new(now, rtc).expect("Error creating the clock type");
+    let alarm = DateTimeFilter {
+        year: None,
+        month: None,
+        day_of_week: None,
+        day: None,
+        hour: Some(9),
+        minute: Some(24),
+        second: None,
+    };
+
+    let mut clock = Clock::new(now, rtc).expect("Error creating the clock type");
+    clock.set_alarm(alarm);
 
     spawner.must_spawn(clock_controller(
         BUTTON_CHANNEL.subscriber().unwrap(),
@@ -270,6 +304,7 @@ async fn main(spawner: Spawner) {
         i2c,
         clock,
         CLOCK_STATE_CHANNEL.subscriber().unwrap(),
+        buzzer,
     ));
     spawner.must_spawn(keypad2msg(keypad, BUTTON_CHANNEL.publisher().unwrap()));
 }

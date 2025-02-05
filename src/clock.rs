@@ -13,8 +13,8 @@ pub enum ClockState {
     DisplayAlarm,
     SetAlarm,
     ShowImage,
+    TestSound,
     Menu(bool, bool, bool), // menu rows
-                            // Menu,
 }
 
 #[derive(Clone, Debug)]
@@ -33,7 +33,7 @@ impl ClockFSM {
 
         self.state = match (self.state, msg) {
             (DisplayTime, A) => DisplayAlarm,
-            (DisplayTime, Asterisk) => SetTime,
+            (DisplayTime, C) => SetTime,
             (DisplayTime, Continue) => DisplayTime,
             (DisplayTime, Numeral) => ShowImage,
             (ShowImage, Continue) => ShowImage,
@@ -53,6 +53,11 @@ impl ClockFSM {
 
             (Menu(false, true, false), D) => Menu(false, false, true),
             (Menu(false, false, true), D) => Menu(true, false, false),
+            // TestSound trigger
+            (Menu(false, false, true), Asterisk) => TestSound,
+            (TestSound, Continue) => TestSound,
+            (TestSound, A) => DisplayTime,
+            (TestSound, _) => TestSound,
 
             (Menu(false, false, false), Continue) => Menu(false, false, false),
             (Menu(false, false, false), A) => Menu(true, false, false),
@@ -64,7 +69,7 @@ impl ClockFSM {
 // TODO(elsuizo: 2024-08-07): ver como se puede hacer para serialize el `DateTime`
 #[derive(Serialize, Deserialize, Debug, Eq, PartialEq)]
 pub struct ClockFromPc<'a> {
-    time: &'a str,
+    time: &'a [u8],
 }
 
 pub struct Clock<'r, T: Instance> {
@@ -98,6 +103,7 @@ impl<'r, T: Instance + 'r> Clock<'r, T> {
         time
     }
 
+    // TODO(elsuizo: 2024-08-17): creo que esto tendria que ser un array de `DateTimeFilter`
     pub fn set_alarm(&mut self, alarms: DateTimeFilter) {
         self.rtc.schedule_alarm(alarms);
     }
