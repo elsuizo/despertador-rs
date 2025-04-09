@@ -29,6 +29,7 @@ mod ui;
 use defmt::info;
 use embassy_rp::rtc::DayOfWeek;
 use embassy_rp::rtc::{DateTime, DateTimeFilter, Rtc};
+use embassy_sync::pubsub::publisher;
 use keypad::embedded_hal::digital::v2::InputPin;
 use keypad::{keypad_new, keypad_struct};
 use ui::{show_menu, Msg};
@@ -38,6 +39,7 @@ use embassy_executor::Spawner;
 use core::convert::Infallible;
 use embassy_rp::gpio::{AnyPin, Input, Level, Output, Pull};
 use embassy_rp::i2c::{self, Config};
+use embassy_rp::interrupt;
 use embassy_rp::peripherals::I2C1;
 use embassy_rp::peripherals::RTC;
 use embassy_sync::{
@@ -115,7 +117,7 @@ pub async fn alarm_sound_test<'a>(buzzer: &'a mut Output<'static>) {
 #[embassy_executor::task]
 pub async fn show_display_states(
     i2c: embassy_rp::i2c::I2c<'static, I2C1, embassy_rp::i2c::Blocking>,
-    clock: Clock<'static, RTC>,
+    mut clock: Clock<'static, RTC>,
     mut clock_state_signal_in: ClockMessageSub,
     buzzer_pin: AnyPin,
 ) {
@@ -166,6 +168,9 @@ pub async fn show_display_states(
             ClockState::SetAlarm => {
                 let _ = Text::new("SetAlarm under construction!!!", Point::new(37, 13), normal)
                     .draw(&mut display);
+            }
+            ClockState::StopAlarm => {
+                clock.rtc.disable_alarm();
             }
         }
         display.flush().ok();
@@ -266,8 +271,8 @@ async fn main(spawner: Spawner) {
 
     let i2c = i2c::I2c::new_blocking(p.I2C1, scl, sda, Config::default());
 
-    let rtc = Rtc::new(p.RTC);
-
+    let mut rtc = Rtc::new(p.RTC);
+    // rtc.schedule_alarm(DateTimeFilter::default().minute(7));
     led.set_high();
     //-------------------------------------------------------------------------
     //                        rtc init
@@ -288,8 +293,8 @@ async fn main(spawner: Spawner) {
         month: None,
         day_of_week: None,
         day: None,
-        hour: Some(9),
-        minute: Some(24),
+        hour: Some(14),
+        minute: Some(7),
         second: None,
     };
 
@@ -307,4 +312,18 @@ async fn main(spawner: Spawner) {
         buzzer,
     ));
     spawner.must_spawn(keypad2msg(keypad, BUTTON_CHANNEL.publisher().unwrap()));
+
+    // Unmask the RTC IRQ so that the NVIC interrupt controller
+    // will jump to the interrupt function when the interrupt occurs.
+    // We do this last so that the interrupt can't go off while
+    // it is in the middle of being configured
+    unsafe {
+        cortex_m::peripheral::NVIC::unmask(interrupt::RTC_IRQ);
+    }
+}
+
+#[allow(non_snake_case)]
+#[interrupt]
+fn RTC_IRQ() {
+    info!("Alarmaaa")
 }

@@ -14,6 +14,7 @@ pub enum ClockState {
     SetAlarm,
     ShowImage,
     TestSound,
+    StopAlarm,
     Menu(bool, bool, bool), // menu rows
 }
 
@@ -62,6 +63,8 @@ impl ClockFSM {
             (Menu(false, false, false), Continue) => Menu(false, false, false),
             (Menu(false, false, false), A) => Menu(true, false, false),
             (Menu(false, false, false), D) => Menu(false, false, true),
+            (StopAlarm, _) => DisplayTime,
+            (_, Zero) => StopAlarm,
             (_, _) => DisplayTime,
         }
     }
@@ -73,7 +76,7 @@ pub struct ClockFromPc<'a> {
 }
 
 pub struct Clock<'r, T: Instance> {
-    rtc: Rtc<'r, T>,
+    pub rtc: Rtc<'r, T>,
     alarm: Option<DateTime>,
     periodic: bool,
 }
