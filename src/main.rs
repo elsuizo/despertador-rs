@@ -25,6 +25,7 @@
 mod clock;
 use clock::Clock;
 use clock::{ClockFSM, ClockState};
+use core::cell::{Cell, RefCell};
 mod ui;
 use defmt::info;
 use embassy_rp::rtc::DayOfWeek;
@@ -152,7 +153,11 @@ pub async fn show_display_states(
             }
             // TODO(elsuizo: 2024-08-13): here should display the alarm date...
             ClockState::DisplayAlarm => {
+                cortex_m::interrupt::disable();
                 let _ = Text::new("Alarm!!!", Point::new(37, 13), normal).draw(&mut display);
+                alarm_sound_test(&mut buzzer).await;
+                clock.disable_alarm();
+                cortex_m::asm::delay(100);
             }
             // show the display menus
             ClockState::Menu(a, b, c) => {
@@ -272,7 +277,6 @@ async fn main(spawner: Spawner) {
     let i2c = i2c::I2c::new_blocking(p.I2C1, scl, sda, Config::default());
 
     let mut rtc = Rtc::new(p.RTC);
-    // rtc.schedule_alarm(DateTimeFilter::default().minute(7));
     led.set_high();
     //-------------------------------------------------------------------------
     //                        rtc init
@@ -280,11 +284,11 @@ async fn main(spawner: Spawner) {
     info!("Start RTC");
     let now = DateTime {
         year: 2025,
-        month: 2,
-        day: 5,
-        day_of_week: DayOfWeek::Wednesday,
-        hour: 14,
-        minute: 5,
+        month: 4,
+        day: 11,
+        day_of_week: DayOfWeek::Friday,
+        hour: 8,
+        minute: 7,
         second: 0,
     };
 
@@ -293,8 +297,8 @@ async fn main(spawner: Spawner) {
         month: None,
         day_of_week: None,
         day: None,
-        hour: Some(14),
-        minute: Some(7),
+        hour: Some(8),
+        minute: Some(8),
         second: None,
     };
 
@@ -322,8 +326,13 @@ async fn main(spawner: Spawner) {
     }
 }
 
+#[embassy_executor::task]
+async fn alarm_mannager(flag: &'static Cell<bool>) {
+    if flag.get() {
+        cortex_m::interrupt::disable();
+    }
+}
+
 #[allow(non_snake_case)]
 #[interrupt]
-fn RTC_IRQ() {
-    info!("Alarmaaa")
-}
+fn RTC_IRQ() {}

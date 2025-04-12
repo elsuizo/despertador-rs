@@ -5,6 +5,7 @@ use defmt::info;
 use embassy_rp::peripherals::RTC;
 use embassy_rp::rtc::{DateTime, DateTimeFilter, DayOfWeek, Instance, Rtc, RtcError};
 use serde::{Deserialize, Serialize};
+use static_cell::StaticCell;
 
 #[derive(Debug, Clone, Copy)]
 pub enum ClockState {
@@ -109,5 +110,9 @@ impl<'r, T: Instance + 'r> Clock<'r, T> {
     // TODO(elsuizo: 2024-08-17): creo que esto tendria que ser un array de `DateTimeFilter`
     pub fn set_alarm(&mut self, alarms: DateTimeFilter) {
         self.rtc.schedule_alarm(alarms);
+    }
+
+    pub fn disable_alarm(&mut self) {
+        self.rtc.disable_alarm();
     }
 }
