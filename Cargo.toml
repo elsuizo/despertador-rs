@@ -14,6 +14,7 @@ embassy-sync = { version = "0.6.2", features = ["defmt"] }
 embassy-executor = { version = "0.7.0", features = ["task-arena-size-32768", "arch-cortex-m", "executor-thread", "executor-interrupt", "defmt" ] }
 embassy-time = { version = "0.4.0", features = ["defmt", "defmt-timestamp-uptime"] }
 embassy-rp = { version = "0.3.0", features = ["defmt", "unstable-pac", "time-driver", "critical-section-impl", "rp2040"] }
+critical-section = "1.1"
 # embassy-usb = { version = "0.1.0", features = ["defmt"] }
 # embassy-net = { version = "0.4.0", features = ["defmt", "tcp", "udp", "dhcpv4", "medium-ethernet"] }
 # embassy-net-wiznet = { version = "0.1.0", features = ["defmt"] }

@@ -33,6 +33,7 @@ use embassy_rp::rtc::{DateTime, DateTimeFilter, Rtc};
 use embassy_sync::pubsub::publisher;
 use keypad::embedded_hal::digital::v2::InputPin;
 use keypad::{keypad_new, keypad_struct};
+use static_cell::StaticCell;
 use ui::{show_menu, Msg};
 // use defmt::*;
 use embassy_executor::Spawner;
@@ -78,6 +79,8 @@ keypad_struct! {
     }
 }
 
+use critical_section::Mutex;
+
 type ChannelMutex = CriticalSectionRawMutex;
 
 // Short-hand type alias for PubSubChannel
@@ -92,6 +95,8 @@ pub type ButtonMessageType = Msg;
 pub type ButtonMessagePub = Pub<ButtonMessageType, BUTTONS_CHANNEL_CAP>;
 pub type ButtonMessageSub = Sub<ButtonMessageType, BUTTONS_CHANNEL_CAP>;
 pub static BUTTON_CHANNEL: Ch<ButtonMessageType, BUTTONS_CHANNEL_CAP> = PubSubChannel::new();
+
+static GLOBAL_SHARED: Mutex<RefCell<Option<Rtc<'static, RTC>>>> = Mutex::new(RefCell::new(None));
 
 const CLOCK_CHANNEL_NUM: usize = 2;
 pub type ClockMessageType = ClockState;
@@ -120,12 +125,10 @@ pub async fn show_display_states(
     i2c: embassy_rp::i2c::I2c<'static, I2C1, embassy_rp::i2c::Blocking>,
     mut clock: Clock<'static, RTC>,
     mut clock_state_signal_in: ClockMessageSub,
-    buzzer_pin: AnyPin,
 ) {
     // TODO(elsuizo: 2024-08-09): is that time ok???
     let mut ticker = Ticker::every(Duration::from_millis(100));
     let mut display: GraphicsMode<_> = Builder::new().connect_i2c(i2c).into();
-    let mut buzzer = Output::new(buzzer_pin, Level::Low);
     display.init().ok();
     display.flush().ok();
 
@@ -153,18 +156,15 @@ pub async fn show_display_states(
             }
             // TODO(elsuizo: 2024-08-13): here should display the alarm date...
             ClockState::DisplayAlarm => {
-                cortex_m::interrupt::disable();
                 let _ = Text::new("Alarm!!!", Point::new(37, 13), normal).draw(&mut display);
-                alarm_sound_test(&mut buzzer).await;
-                clock.disable_alarm();
-                cortex_m::asm::delay(100);
             }
             // show the display menus
             ClockState::Menu(a, b, c) => {
                 show_menu(&mut display, (a, b, c)).expect("no se pudo mostrar ese estado");
             }
             ClockState::TestSound => {
-                alarm_sound_test(&mut buzzer).await;
+                // alarm_sound_test(&mut buzzer).await;
+                info!("ALARM SOUND TEST");
             }
             ClockState::SetTime => {
                 let _ = Text::new("Settime under construction!!!", Point::new(37, 13), normal)
@@ -184,7 +184,6 @@ pub async fn show_display_states(
     }
 }
 
-// NOTE(elsuizo: 2024-08-15): no anda la concha de tu madre
 #[embassy_executor::task]
 pub async fn keypad2msg(keypad: Keypad, button_command: ButtonMessagePub) {
     let mut ticker = Ticker::every(Duration::from_millis(10));
@@ -276,7 +275,7 @@ async fn main(spawner: Spawner) {
 
     let i2c = i2c::I2c::new_blocking(p.I2C1, scl, sda, Config::default());
 
-    let mut rtc = Rtc::new(p.RTC);
+    // let mut rtc = Rtc::new(p.RTC);
     led.set_high();
     //-------------------------------------------------------------------------
     //                        rtc init
@@ -302,7 +301,15 @@ async fn main(spawner: Spawner) {
         second: None,
     };
 
-    let mut clock = Clock::new(now, rtc).expect("Error creating the clock type");
+    critical_section::with(|cs| {
+        GLOBAL_SHARED.borrow(cs).replace(Some(Rtc::new(p.RTC)));
+    });
+
+    let mut clock = Clock::new(
+        now,
+        critical_section::with(|cs| GLOBAL_SHARED.borrow(cs).take().unwrap()),
+    )
+    .expect("Error creating the clock type");
     clock.set_alarm(alarm);
 
     spawner.must_spawn(clock_controller(
@@ -313,8 +320,11 @@ async fn main(spawner: Spawner) {
         i2c,
         clock,
         CLOCK_STATE_CHANNEL.subscriber().unwrap(),
-        buzzer,
     ));
+
+    static FLAG: StaticCell<Cell<bool>> = StaticCell::new();
+
+    let flag = FLAG.init(Default::default());
     spawner.must_spawn(keypad2msg(keypad, BUTTON_CHANNEL.publisher().unwrap()));
 
     // Unmask the RTC IRQ so that the NVIC interrupt controller
@@ -325,14 +335,50 @@ async fn main(spawner: Spawner) {
         cortex_m::peripheral::NVIC::unmask(interrupt::RTC_IRQ);
     }
 }
-
 #[embassy_executor::task]
-async fn alarm_mannager(flag: &'static Cell<bool>) {
-    if flag.get() {
-        cortex_m::interrupt::disable();
-    }
+async fn print_flag_state(flag: &'static Cell<bool>) {
+    info!("The state of the flag is: {}", flag.get())
 }
 
+// #[embassy_executor::task]
+// async fn alarm_mannager(
+//     flag: &'static Cell<bool>,
+//     mut clock: Clock<'static, RTC>,
+//     buzzer_pin: AnyPin,
+// ) {
+//     let mut buzzer = Output::new(buzzer_pin, Level::Low);
+//     if flag.get() {
+//         alarm_sound_test(&mut buzzer).await;
+//         clock.disable_alarm();
+//         flag.set(false);
+//     }
+// }
+
 #[allow(non_snake_case)]
+#[allow(static_mut_refs)] // See https://github.com/rust-embedded/cortex-m/pull/561
 #[interrupt]
-fn RTC_IRQ() {}
+fn RTC_IRQ() {
+    // The `#[interrupt]` attribute covertly converts this to `&'static mut Option<LedAndRtc>`
+    static mut RTC: Option<Rtc<'_, RTC>> = None;
+
+    // This is one-time lazy initialisation. We steal the variables given to us
+    // via `GLOBAL_SHARED`.
+    if RTC.is_none() {
+        critical_section::with(|cs| {
+            *RTC = GLOBAL_SHARED.borrow(cs).take();
+        });
+    }
+
+    let button_command = BUTTON_CHANNEL.publisher().unwrap();
+    // Need to check if our Option<LedAndButtonPins> contains our pins
+    // LED_AND_RTC is an `&'static mut Option<LedAndRtc>` thanks to the interrupt macro's magic.
+    // The pattern binding mode handles an ergonomic conversion of the match from `if let Some(led_and_rtc)`
+    // to `if let Some(ref mut led_and_rtc)`.
+    //
+    // https://doc.rust-lang.org/reference/patterns.html#binding-modes
+    if let Some(rtc) = RTC {
+        // clear the interrupt flag so that it stops firing for now and can be triggered again.
+        rtc.clear_interrupt();
+        button_command.try_publish(Msg::A).ok();
+    }
+}
