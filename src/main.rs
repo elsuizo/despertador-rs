@@ -61,6 +61,7 @@ use embedded_graphics::{
     prelude::*,
     text::Text,
 };
+use portable_atomic::{AtomicBool, Ordering};
 
 // TODO(elsuizo: 2024-08-09): ver como podemos sacar esto de aca ...
 keypad_struct! {
@@ -82,6 +83,7 @@ keypad_struct! {
 
 use critical_section::Mutex;
 
+static FLAG: AtomicBool = AtomicBool::new(false);
 type ChannelMutex = CriticalSectionRawMutex;
 
 // Short-hand type alias for PubSubChannel
@@ -251,6 +253,9 @@ pub async fn clock_controller(
 
 #[embassy_executor::main]
 async fn main(spawner: Spawner) {
+    unsafe {
+        cortex_m::peripheral::NVIC::unmask(interrupt::RTC_IRQ);
+    }
     info!("init program");
     let p = embassy_rp::init(Default::default());
     let mut led = Output::new(p.PIN_25, Level::Low);
@@ -326,16 +331,15 @@ async fn main(spawner: Spawner) {
         CLOCK_STATE_CHANNEL.subscriber().unwrap(),
     ));
 
+    let flag = FLAG.swap(false, Ordering::Relaxed);
     spawner.must_spawn(keypad2msg(keypad, BUTTON_CHANNEL.publisher().unwrap()));
 
     // Unmask the RTC IRQ so that the NVIC interrupt controller
     // will jump to the interrupt function when the interrupt occurs.
     // We do this last so that the interrupt can't go off while
     // it is in the middle of being configured
-    unsafe {
-        cortex_m::peripheral::NVIC::unmask(interrupt::RTC_IRQ);
-    }
 }
+
 #[embassy_executor::task]
 async fn print_flag_state(flag: &'static Cell<bool>) {
     info!("The state of the flag is: {}", flag.get())
@@ -359,16 +363,23 @@ async fn print_flag_state(flag: &'static Cell<bool>) {
 #[allow(static_mut_refs)] // See https://github.com/rust-embedded/cortex-m/pull/561
 #[interrupt]
 fn RTC_IRQ() {
-    // The `#[interrupt]` attribute covertly converts this to `&'static mut Option<LedAndRtc>`
-    static mut RTC_AND_CLOCK_FSM: Option<(Rtc<'_, RTC>, ClockFSM)> = None;
+    // // The `#[interrupt]` attribute covertly converts this to `&'static mut Option<LedAndRtc>`
+    critical_section::with(|cs| {
+        if let Some((mut rtc, mut clock_fsm)) = GLOBAL_SHARED.borrow(cs).borrow_mut().take() {
+            info!("entramos en la alarma");
+            clock_fsm.state = ClockState::DisplayAlarm;
+            rtc.clear_interrupt();
+        }
+    });
 
     // This is one-time lazy initialisation. We steal the variables given to us
     // via `GLOBAL_SHARED`.
-    if RTC_AND_CLOCK_FSM.is_none() {
-        critical_section::with(|cs| {
-            *RTC_AND_CLOCK_FSM = GLOBAL_SHARED.borrow(cs).take();
-        });
-    }
+    // if RTC_AND_CLOCK_FSM.is_none() {
+    //     critical_section::with(|cs| {
+    //         *RTC_AND_CLOCK_FSM = GLOBAL_SHARED.borrow(cs).take();
+    //     });
+    // }
+    FLAG.store(true, Ordering::Relaxed);
 
     // let button_command = BUTTON_CHANNEL.publisher().unwrap();
     // Need to check if our Option<LedAndButtonPins> contains our pins
@@ -377,11 +388,11 @@ fn RTC_IRQ() {
     // to `if let Some(ref mut led_and_rtc)`.
     //
     // https://doc.rust-lang.org/reference/patterns.html#binding-modes
-    if let Some(rtc_and_clock_state) = RTC_AND_CLOCK_FSM {
-        info!("ingresamos en la interrupcion y ahora limpiamos todo");
-        let (rtc, clock_fsm) = rtc_and_clock_state;
-        // clear the interrupt flag so that it stops firing for now and can be triggered again.
-        clock_fsm.state = ClockState::DisplayAlarm;
-        rtc.clear_interrupt();
-    }
+    // if let Some(rtc_and_clock_state) = RTC_AND_CLOCK_FSM {
+    //     info!("ingresamos en la interrupcion y ahora limpiamos todo");
+    //     let (rtc, clock_fsm) = rtc_and_clock_state;
+    //     // clear the interrupt flag so that it stops firing for now and can be triggered again.
+    //     clock_fsm.state = ClockState::DisplayAlarm;
+    //     rtc.clear_interrupt();
+    // }
 }
