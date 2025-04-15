@@ -28,6 +28,7 @@ use clock::{ClockFSM, ClockState};
 use core::cell::{Cell, RefCell};
 mod ui;
 use defmt::info;
+use embassy_rp::bind_interrupts;
 use embassy_rp::rtc::DayOfWeek;
 use embassy_rp::rtc::{DateTime, DateTimeFilter, Rtc};
 use embassy_sync::pubsub::publisher;
@@ -96,7 +97,8 @@ pub type ButtonMessagePub = Pub<ButtonMessageType, BUTTONS_CHANNEL_CAP>;
 pub type ButtonMessageSub = Sub<ButtonMessageType, BUTTONS_CHANNEL_CAP>;
 pub static BUTTON_CHANNEL: Ch<ButtonMessageType, BUTTONS_CHANNEL_CAP> = PubSubChannel::new();
 
-static GLOBAL_SHARED: Mutex<RefCell<Option<Rtc<'static, RTC>>>> = Mutex::new(RefCell::new(None));
+static GLOBAL_SHARED: Mutex<RefCell<Option<(Rtc<'static, RTC>, ClockFSM)>>> =
+    Mutex::new(RefCell::new(None));
 
 const CLOCK_CHANNEL_NUM: usize = 2;
 pub type ClockMessageType = ClockState;
@@ -234,9 +236,10 @@ pub async fn keypad2msg(keypad: Keypad, button_command: ButtonMessagePub) {
 pub async fn clock_controller(
     mut button_command_input: ButtonMessageSub,
     clock_state_signal_out: ClockMessagePub,
+    mut clock_fsm: ClockFSM,
 ) {
     let mut ticker = Ticker::every(Duration::from_millis(30));
-    let mut clock_fsm = ClockFSM::init(ClockState::DisplayTime);
+    // let mut clock_fsm = ClockFSM::init(ClockState::DisplayTime);
 
     loop {
         let message = button_command_input.next_message_pure().await;
@@ -301,20 +304,21 @@ async fn main(spawner: Spawner) {
         second: None,
     };
 
+    let fsm_init = ClockFSM::init(ClockState::DisplayTime);
     critical_section::with(|cs| {
-        GLOBAL_SHARED.borrow(cs).replace(Some(Rtc::new(p.RTC)));
+        GLOBAL_SHARED
+            .borrow(cs)
+            .replace(Some((Rtc::new(p.RTC), fsm_init)));
     });
 
-    let mut clock = Clock::new(
-        now,
-        critical_section::with(|cs| GLOBAL_SHARED.borrow(cs).take().unwrap()),
-    )
-    .expect("Error creating the clock type");
+    let (rtc, fsm) = critical_section::with(|cs| GLOBAL_SHARED.borrow(cs).take().unwrap());
+    let mut clock = Clock::new(now, rtc).expect("Error creating the clock type");
     clock.set_alarm(alarm);
 
     spawner.must_spawn(clock_controller(
         BUTTON_CHANNEL.subscriber().unwrap(),
         CLOCK_STATE_CHANNEL.publisher().unwrap(),
+        fsm,
     ));
     spawner.must_spawn(show_display_states(
         i2c,
@@ -322,9 +326,6 @@ async fn main(spawner: Spawner) {
         CLOCK_STATE_CHANNEL.subscriber().unwrap(),
     ));
 
-    static FLAG: StaticCell<Cell<bool>> = StaticCell::new();
-
-    let flag = FLAG.init(Default::default());
     spawner.must_spawn(keypad2msg(keypad, BUTTON_CHANNEL.publisher().unwrap()));
 
     // Unmask the RTC IRQ so that the NVIC interrupt controller
@@ -359,26 +360,28 @@ async fn print_flag_state(flag: &'static Cell<bool>) {
 #[interrupt]
 fn RTC_IRQ() {
     // The `#[interrupt]` attribute covertly converts this to `&'static mut Option<LedAndRtc>`
-    static mut RTC: Option<Rtc<'_, RTC>> = None;
+    static mut RTC_AND_CLOCK_FSM: Option<(Rtc<'_, RTC>, ClockFSM)> = None;
 
     // This is one-time lazy initialisation. We steal the variables given to us
     // via `GLOBAL_SHARED`.
-    if RTC.is_none() {
+    if RTC_AND_CLOCK_FSM.is_none() {
         critical_section::with(|cs| {
-            *RTC = GLOBAL_SHARED.borrow(cs).take();
+            *RTC_AND_CLOCK_FSM = GLOBAL_SHARED.borrow(cs).take();
         });
     }
 
-    let button_command = BUTTON_CHANNEL.publisher().unwrap();
+    // let button_command = BUTTON_CHANNEL.publisher().unwrap();
     // Need to check if our Option<LedAndButtonPins> contains our pins
     // LED_AND_RTC is an `&'static mut Option<LedAndRtc>` thanks to the interrupt macro's magic.
     // The pattern binding mode handles an ergonomic conversion of the match from `if let Some(led_and_rtc)`
     // to `if let Some(ref mut led_and_rtc)`.
     //
     // https://doc.rust-lang.org/reference/patterns.html#binding-modes
-    if let Some(rtc) = RTC {
+    if let Some(rtc_and_clock_state) = RTC_AND_CLOCK_FSM {
+        info!("ingresamos en la interrupcion y ahora limpiamos todo");
+        let (rtc, clock_fsm) = rtc_and_clock_state;
         // clear the interrupt flag so that it stops firing for now and can be triggered again.
+        clock_fsm.state = ClockState::DisplayAlarm;
         rtc.clear_interrupt();
-        button_command.try_publish(Msg::A).ok();
     }
 }
