@@ -92,8 +92,8 @@ impl<'r, T: Instance + 'r> Clock<'r, T> {
         })
     }
 
-    pub fn read(&self) -> String<256> {
-        let mut time: String<256> = String::new();
+    pub fn read(&self) -> String<10> {
+        let mut time: String<10> = String::new();
         if let Ok(dt) = self.rtc.now() {
             write!(
                 &mut time,

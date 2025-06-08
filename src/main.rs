@@ -26,6 +26,7 @@ mod clock;
 use clock::Clock;
 use clock::{ClockFSM, ClockState};
 use core::cell::{Cell, RefCell};
+use embassy_sync::{channel, signal};
 mod ui;
 use defmt::info;
 use embassy_rp::bind_interrupts;
@@ -81,9 +82,10 @@ keypad_struct! {
     }
 }
 
-use critical_section::Mutex;
+// use critical_section::Mutex;
+/// Signal for notifying about state changes
+static ALARM_TRIGGERED: signal::Signal<CriticalSectionRawMutex, ()> = signal::Signal::new();
 
-static FLAG: AtomicBool = AtomicBool::new(false);
 type ChannelMutex = CriticalSectionRawMutex;
 
 // Short-hand type alias for PubSubChannel
@@ -99,11 +101,11 @@ pub type ButtonMessagePub = Pub<ButtonMessageType, BUTTONS_CHANNEL_CAP>;
 pub type ButtonMessageSub = Sub<ButtonMessageType, BUTTONS_CHANNEL_CAP>;
 pub static BUTTON_CHANNEL: Ch<ButtonMessageType, BUTTONS_CHANNEL_CAP> = PubSubChannel::new();
 
-static GLOBAL_SHARED: Mutex<RefCell<Option<(Rtc<'static, RTC>, ClockFSM)>>> =
-    Mutex::new(RefCell::new(None));
+// static GLOBAL_SHARED: Mutex<RefCell<Option<(Rtc<'static, RTC>, ClockFSM)>>> =
+//     Mutex::new(RefCell::new(None));
 
 const CLOCK_CHANNEL_NUM: usize = 2;
-pub type ClockMessageType = ClockState;
+pub type ClockMessageType = (ClockState, String<10>);
 pub type ClockMessagePub = Pub<ClockMessageType, CLOCK_CHANNEL_NUM>;
 pub type ClockMessageSub = Sub<ClockMessageType, CLOCK_CHANNEL_NUM>;
 pub static CLOCK_STATE_CHANNEL: Ch<ClockMessageType, CLOCK_CHANNEL_NUM> = PubSubChannel::new();
@@ -127,14 +129,15 @@ pub async fn alarm_sound_test<'a>(buzzer: &'a mut Output<'static>) {
 #[embassy_executor::task]
 pub async fn show_display_states(
     i2c: embassy_rp::i2c::I2c<'static, I2C1, embassy_rp::i2c::Blocking>,
-    mut clock: Clock<'static, RTC>,
     mut clock_state_signal_in: ClockMessageSub,
+    buzzer_pin: AnyPin,
 ) {
     // TODO(elsuizo: 2024-08-09): is that time ok???
     let mut ticker = Ticker::every(Duration::from_millis(100));
     let mut display: GraphicsMode<_> = Builder::new().connect_i2c(i2c).into();
     display.init().ok();
     display.flush().ok();
+    let mut buzzer = Output::new(buzzer_pin, Level::Low);
 
     let normal = MonoTextStyleBuilder::new()
         .font(&FONT_9X15)
@@ -149,38 +152,37 @@ pub async fn show_display_states(
     let logo_image = ImageRawLE::new(include_bytes!("../Images/rust.raw"), 64);
 
     // TODO(elsuizo: 2024-08-13): this menus items should be a function...
+    // TODO(elsuizo: 2025-06-08): we need the `time` variable only in few callings maybe is not a
+    // good idea transmit over ...
     loop {
-        let time = clock.read();
         match clock_state_signal_in.next_message_pure().await {
-            ClockState::DisplayTime => {
+            (ClockState::DisplayTime, time) => {
                 let _ = Text::new(&time, Point::new(30, 13), normal).draw(&mut display);
             }
-            ClockState::ShowImage => {
+            (ClockState::ShowImage, _) => {
                 let _ = Image::new(&logo_image, Point::new(32, 0)).draw(&mut display);
             }
             // TODO(elsuizo: 2024-08-13): here should display the alarm date...
-            ClockState::DisplayAlarm => {
+            (ClockState::DisplayAlarm, _) => {
                 let _ = Text::new("Alarm!!!", Point::new(37, 13), normal).draw(&mut display);
             }
             // show the display menus
-            ClockState::Menu(a, b, c) => {
+            (ClockState::Menu(a, b, c), _) => {
                 show_menu(&mut display, (a, b, c)).expect("no se pudo mostrar ese estado");
             }
-            ClockState::TestSound => {
-                // alarm_sound_test(&mut buzzer).await;
-                info!("ALARM SOUND TEST");
+            (ClockState::TestSound, _) => {
+                alarm_sound_test(&mut buzzer).await;
+                info!("Alarm!!!");
             }
-            ClockState::SetTime => {
+            (ClockState::SetTime, _time) => {
                 let _ = Text::new("Settime under construction!!!", Point::new(37, 13), normal)
                     .draw(&mut display);
             }
-            ClockState::SetAlarm => {
+            (ClockState::SetAlarm, _time) => {
                 let _ = Text::new("SetAlarm under construction!!!", Point::new(37, 13), normal)
                     .draw(&mut display);
             }
-            ClockState::StopAlarm => {
-                clock.rtc.disable_alarm();
-            }
+            (ClockState::StopAlarm, _time) => {}
         }
         display.flush().ok();
         display.clear();
@@ -194,7 +196,6 @@ pub async fn keypad2msg(keypad: Keypad, button_command: ButtonMessagePub) {
     button_command.publish_immediate(Msg::Continue);
     let keys = keypad.decompose();
 
-    // let first_key = &keys[0][0];
     loop {
         for (row_index, row) in keys.iter().enumerate() {
             for (col_index, key) in row.iter().enumerate() {
@@ -238,15 +239,16 @@ pub async fn keypad2msg(keypad: Keypad, button_command: ButtonMessagePub) {
 pub async fn clock_controller(
     mut button_command_input: ButtonMessageSub,
     clock_state_signal_out: ClockMessagePub,
+    clock: Clock<'static, RTC>,
     mut clock_fsm: ClockFSM,
 ) {
     let mut ticker = Ticker::every(Duration::from_millis(30));
-    // let mut clock_fsm = ClockFSM::init(ClockState::DisplayTime);
 
     loop {
+        let time = clock.read();
         let message = button_command_input.next_message_pure().await;
         clock_fsm.next_state(message);
-        clock_state_signal_out.publish_immediate(clock_fsm.state);
+        clock_state_signal_out.publish_immediate((clock_fsm.state, time));
         ticker.next().await;
     }
 }
@@ -291,11 +293,11 @@ async fn main(spawner: Spawner) {
     info!("Start RTC");
     let now = DateTime {
         year: 2025,
-        month: 4,
-        day: 11,
-        day_of_week: DayOfWeek::Friday,
-        hour: 8,
-        minute: 7,
+        month: 6,
+        day: 8,
+        day_of_week: DayOfWeek::Sunday,
+        hour: 20,
+        minute: 21,
         second: 0,
     };
 
@@ -304,34 +306,29 @@ async fn main(spawner: Spawner) {
         month: None,
         day_of_week: None,
         day: None,
-        hour: Some(8),
-        minute: Some(8),
+        hour: Some(20),
+        minute: Some(23),
         second: None,
     };
 
-    let fsm_init = ClockFSM::init(ClockState::DisplayTime);
-    critical_section::with(|cs| {
-        GLOBAL_SHARED
-            .borrow(cs)
-            .replace(Some((Rtc::new(p.RTC), fsm_init)));
-    });
+    let fsm = ClockFSM::init(ClockState::DisplayTime);
 
-    let (rtc, fsm) = critical_section::with(|cs| GLOBAL_SHARED.borrow(cs).take().unwrap());
+    let rtc = Rtc::new(p.RTC);
     let mut clock = Clock::new(now, rtc).expect("Error creating the clock type");
     clock.set_alarm(alarm);
 
     spawner.must_spawn(clock_controller(
         BUTTON_CHANNEL.subscriber().unwrap(),
         CLOCK_STATE_CHANNEL.publisher().unwrap(),
+        clock,
         fsm,
     ));
     spawner.must_spawn(show_display_states(
         i2c,
-        clock,
         CLOCK_STATE_CHANNEL.subscriber().unwrap(),
+        buzzer,
     ));
 
-    let flag = FLAG.swap(false, Ordering::Relaxed);
     spawner.must_spawn(keypad2msg(keypad, BUTTON_CHANNEL.publisher().unwrap()));
 
     // Unmask the RTC IRQ so that the NVIC interrupt controller
@@ -340,59 +337,11 @@ async fn main(spawner: Spawner) {
     // it is in the middle of being configured
 }
 
-#[embassy_executor::task]
-async fn print_flag_state(flag: &'static Cell<bool>) {
-    info!("The state of the flag is: {}", flag.get())
-}
-
-// #[embassy_executor::task]
-// async fn alarm_mannager(
-//     flag: &'static Cell<bool>,
-//     mut clock: Clock<'static, RTC>,
-//     buzzer_pin: AnyPin,
-// ) {
-//     let mut buzzer = Output::new(buzzer_pin, Level::Low);
-//     if flag.get() {
-//         alarm_sound_test(&mut buzzer).await;
-//         clock.disable_alarm();
-//         flag.set(false);
-//     }
-// }
-
-#[allow(non_snake_case)]
-#[allow(static_mut_refs)] // See https://github.com/rust-embedded/cortex-m/pull/561
 #[interrupt]
 fn RTC_IRQ() {
-    // // The `#[interrupt]` attribute covertly converts this to `&'static mut Option<LedAndRtc>`
-    critical_section::with(|cs| {
-        if let Some((mut rtc, mut clock_fsm)) = GLOBAL_SHARED.borrow(cs).borrow_mut().take() {
-            info!("entramos en la alarma");
-            clock_fsm.state = ClockState::DisplayAlarm;
-            rtc.clear_interrupt();
-        }
-    });
+    unsafe {
+        cortex_m::peripheral::NVIC::unmask(interrupt::RTC_IRQ);
+    }
 
-    // This is one-time lazy initialisation. We steal the variables given to us
-    // via `GLOBAL_SHARED`.
-    // if RTC_AND_CLOCK_FSM.is_none() {
-    //     critical_section::with(|cs| {
-    //         *RTC_AND_CLOCK_FSM = GLOBAL_SHARED.borrow(cs).take();
-    //     });
-    // }
-    FLAG.store(true, Ordering::Relaxed);
-
-    // let button_command = BUTTON_CHANNEL.publisher().unwrap();
-    // Need to check if our Option<LedAndButtonPins> contains our pins
-    // LED_AND_RTC is an `&'static mut Option<LedAndRtc>` thanks to the interrupt macro's magic.
-    // The pattern binding mode handles an ergonomic conversion of the match from `if let Some(led_and_rtc)`
-    // to `if let Some(ref mut led_and_rtc)`.
-    //
-    // https://doc.rust-lang.org/reference/patterns.html#binding-modes
-    // if let Some(rtc_and_clock_state) = RTC_AND_CLOCK_FSM {
-    //     info!("ingresamos en la interrupcion y ahora limpiamos todo");
-    //     let (rtc, clock_fsm) = rtc_and_clock_state;
-    //     // clear the interrupt flag so that it stops firing for now and can be triggered again.
-    //     clock_fsm.state = ClockState::DisplayAlarm;
-    //     rtc.clear_interrupt();
-    // }
+    ALARM_TRIGGERED.signal(());
 }
