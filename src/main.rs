@@ -105,7 +105,7 @@ pub static BUTTON_CHANNEL: Ch<ButtonMessageType, BUTTONS_CHANNEL_CAP> = PubSubCh
 //     Mutex::new(RefCell::new(None));
 
 const CLOCK_CHANNEL_NUM: usize = 2;
-pub type ClockMessageType = (ClockState, String<150>);
+pub type ClockMessageType = (ClockState, String<256>);
 pub type ClockMessagePub = Pub<ClockMessageType, CLOCK_CHANNEL_NUM>;
 pub type ClockMessageSub = Sub<ClockMessageType, CLOCK_CHANNEL_NUM>;
 pub static CLOCK_STATE_CHANNEL: Ch<ClockMessageType, CLOCK_CHANNEL_NUM> = PubSubChannel::new();
@@ -256,9 +256,6 @@ pub async fn clock_controller(
 
 #[embassy_executor::main]
 async fn main(spawner: Spawner) {
-    unsafe {
-        cortex_m::peripheral::NVIC::unmask(interrupt::RTC_IRQ);
-    }
     info!("init program");
     let p = embassy_rp::init(Default::default());
     let mut led = Output::new(p.PIN_25, Level::Low);
@@ -336,6 +333,9 @@ async fn main(spawner: Spawner) {
     // will jump to the interrupt function when the interrupt occurs.
     // We do this last so that the interrupt can't go off while
     // it is in the middle of being configured
+    unsafe {
+        cortex_m::peripheral::NVIC::unmask(interrupt::RTC_IRQ);
+    }
 }
 
 #[interrupt]
