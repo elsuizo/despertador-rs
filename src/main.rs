@@ -105,7 +105,7 @@ pub static BUTTON_CHANNEL: Ch<ButtonMessageType, BUTTONS_CHANNEL_CAP> = PubSubCh
 //     Mutex::new(RefCell::new(None));
 
 const CLOCK_CHANNEL_NUM: usize = 2;
-pub type ClockMessageType = (ClockState, String<10>);
+pub type ClockMessageType = (ClockState, String<150>);
 pub type ClockMessagePub = Pub<ClockMessageType, CLOCK_CHANNEL_NUM>;
 pub type ClockMessageSub = Sub<ClockMessageType, CLOCK_CHANNEL_NUM>;
 pub static CLOCK_STATE_CHANNEL: Ch<ClockMessageType, CLOCK_CHANNEL_NUM> = PubSubChannel::new();
@@ -245,6 +245,7 @@ pub async fn clock_controller(
     let mut ticker = Ticker::every(Duration::from_millis(30));
 
     loop {
+        ALARM_TRIGGERED.wait().await;
         let time = clock.read();
         let message = button_command_input.next_message_pure().await;
         clock_fsm.next_state(message);
@@ -294,10 +295,10 @@ async fn main(spawner: Spawner) {
     let now = DateTime {
         year: 2025,
         month: 6,
-        day: 8,
+        day: 10,
         day_of_week: DayOfWeek::Sunday,
-        hour: 20,
-        minute: 21,
+        hour: 13,
+        minute: 45,
         second: 0,
     };
 
@@ -315,7 +316,7 @@ async fn main(spawner: Spawner) {
 
     let rtc = Rtc::new(p.RTC);
     let mut clock = Clock::new(now, rtc).expect("Error creating the clock type");
-    clock.set_alarm(alarm);
+    // clock.set_alarm(alarm);
 
     spawner.must_spawn(clock_controller(
         BUTTON_CHANNEL.subscriber().unwrap(),
@@ -339,9 +340,7 @@ async fn main(spawner: Spawner) {
 
 #[interrupt]
 fn RTC_IRQ() {
-    unsafe {
-        cortex_m::peripheral::NVIC::unmask(interrupt::RTC_IRQ);
-    }
+    cortex_m::peripheral::NVIC::mask(interrupt::RTC_IRQ);
 
     ALARM_TRIGGERED.signal(());
 }
