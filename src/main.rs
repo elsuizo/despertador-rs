@@ -130,14 +130,13 @@ pub async fn alarm_sound_test<'a>(buzzer: &'a mut Output<'static>) {
 pub async fn show_display_states(
     i2c: embassy_rp::i2c::I2c<'static, I2C1, embassy_rp::i2c::Blocking>,
     mut clock_state_signal_in: ClockMessageSub,
-    buzzer_pin: AnyPin,
 ) {
     // TODO(elsuizo: 2024-08-09): is that time ok???
     let mut ticker = Ticker::every(Duration::from_millis(100));
     let mut display: GraphicsMode<_> = Builder::new().connect_i2c(i2c).into();
     display.init().ok();
     display.flush().ok();
-    let mut buzzer = Output::new(buzzer_pin, Level::Low);
+    // let mut buzzer = Output::new(buzzer_pin, Level::Low);
 
     let normal = MonoTextStyleBuilder::new()
         .font(&FONT_9X15)
@@ -171,7 +170,7 @@ pub async fn show_display_states(
                 show_menu(&mut display, (a, b, c)).expect("no se pudo mostrar ese estado");
             }
             (ClockState::TestSound, _) => {
-                alarm_sound_test(&mut buzzer).await;
+                // alarm_sound_test(&mut buzzer).await;
                 info!("Alarm!!!");
             }
             (ClockState::SetTime, _time) => {
@@ -222,7 +221,7 @@ pub async fn keypad2msg(keypad: Keypad, button_command: ButtonMessagePub) {
                         (3, 0) => button_command.publish_immediate(Msg::Asterisk),
                         (3, 1) => button_command.publish_immediate(Msg::Zero),
                         (3, 2) => button_command.publish_immediate(Msg::Numeral),
-                        (3, 3) => button_command.publish_immediate(Msg::D),
+                        (3, 3) | (0, 0) => button_command.publish_immediate(Msg::D),
                         (_, _) => panic!("Nooo"),
                     }
                 }
@@ -230,6 +229,15 @@ pub async fn keypad2msg(keypad: Keypad, button_command: ButtonMessagePub) {
         }
         button_command.publish(Msg::Continue).await; // no button was pressed
         ticker.next().await;
+    }
+}
+
+#[embassy_executor::task]
+pub async fn alarm_event(buzzer_pin: AnyPin) {
+    let mut buzzer = Output::new(buzzer_pin, Level::Low);
+    loop {
+        ALARM_TRIGGERED.wait().await;
+        alarm_sound_test(&mut buzzer).await;
     }
 }
 
@@ -245,7 +253,6 @@ pub async fn clock_controller(
     let mut ticker = Ticker::every(Duration::from_millis(30));
 
     loop {
-        ALARM_TRIGGERED.wait().await;
         let time = clock.read();
         let message = button_command_input.next_message_pure().await;
         clock_fsm.next_state(message);
@@ -292,10 +299,10 @@ async fn main(spawner: Spawner) {
     let now = DateTime {
         year: 2025,
         month: 6,
-        day: 10,
-        day_of_week: DayOfWeek::Sunday,
-        hour: 13,
-        minute: 45,
+        day: 12,
+        day_of_week: DayOfWeek::Thursday,
+        hour: 14,
+        minute: 7,
         second: 0,
     };
 
@@ -304,8 +311,8 @@ async fn main(spawner: Spawner) {
         month: None,
         day_of_week: None,
         day: None,
-        hour: Some(20),
-        minute: Some(23),
+        hour: Some(14),
+        minute: Some(8),
         second: None,
     };
 
@@ -313,7 +320,7 @@ async fn main(spawner: Spawner) {
 
     let rtc = Rtc::new(p.RTC);
     let mut clock = Clock::new(now, rtc).expect("Error creating the clock type");
-    // clock.set_alarm(alarm);
+    clock.set_alarm(alarm);
 
     spawner.must_spawn(clock_controller(
         BUTTON_CHANNEL.subscriber().unwrap(),
@@ -324,10 +331,10 @@ async fn main(spawner: Spawner) {
     spawner.must_spawn(show_display_states(
         i2c,
         CLOCK_STATE_CHANNEL.subscriber().unwrap(),
-        buzzer,
     ));
 
     spawner.must_spawn(keypad2msg(keypad, BUTTON_CHANNEL.publisher().unwrap()));
+    spawner.must_spawn(alarm_event(buzzer));
 
     // Unmask the RTC IRQ so that the NVIC interrupt controller
     // will jump to the interrupt function when the interrupt occurs.
