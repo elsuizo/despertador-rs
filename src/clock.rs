@@ -1,11 +1,9 @@
-use crate::ui::Msg;
 use crate::String;
+use crate::{ui::Msg, ALARM_TRIGGERED};
 use core::fmt::Write;
 use defmt::info;
-use embassy_rp::peripherals::RTC;
-use embassy_rp::rtc::{DateTime, DateTimeFilter, DayOfWeek, Instance, Rtc, RtcError};
+use embassy_rp::rtc::{DateTime, DateTimeFilter, Instance, Rtc, RtcError};
 use serde::{Deserialize, Serialize};
-use static_cell::StaticCell;
 
 #[derive(Debug, Clone, Copy)]
 pub enum ClockState {
@@ -16,10 +14,11 @@ pub enum ClockState {
     ShowImage,
     TestSound,
     StopAlarm,
+    Alarm,
     Menu(bool, bool, bool), // menu rows
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Copy)]
 pub struct ClockFSM {
     pub state: ClockState,
 }
@@ -40,6 +39,7 @@ impl ClockFSM {
             (DisplayTime, Numeral) => ShowImage,
             (ShowImage, Continue) => ShowImage,
             (DisplayTime, B) => Menu(false, false, false),
+            (DisplayTime, AlarmEvent) => Alarm,
             (DisplayTime, _) => DisplayTime, // any other keys
             // up
             (Menu(true, false, false), A) => Menu(false, false, true),
@@ -65,7 +65,8 @@ impl ClockFSM {
             (Menu(false, false, false), A) => Menu(true, false, false),
             (Menu(false, false, false), D) => Menu(false, false, true),
             (StopAlarm, _) => DisplayTime,
-            (_, Zero) => StopAlarm,
+            (Alarm, Continue) => Alarm,
+            (Alarm, Zero) => StopAlarm,
             (_, _) => DisplayTime,
         }
     }
@@ -92,8 +93,8 @@ impl<'r, T: Instance + 'r> Clock<'r, T> {
         })
     }
 
-    pub fn read(&self) -> String<256> {
-        let mut time: String<256> = String::new();
+    pub fn read(&self) -> String<37> {
+        let mut time: String<37> = String::new();
         if let Ok(dt) = self.rtc.now() {
             write!(
                 &mut time,

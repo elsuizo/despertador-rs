@@ -89,9 +89,9 @@ static ALARM_TRIGGERED: signal::Signal<CriticalSectionRawMutex, ()> = signal::Si
 type ChannelMutex = CriticalSectionRawMutex;
 
 // Short-hand type alias for PubSubChannel
-type Pub<T, const N: usize> = Publisher<'static, ChannelMutex, T, 1, N, 1>;
-type Sub<T, const N: usize> = Subscriber<'static, ChannelMutex, T, 1, N, 1>;
-type Ch<T, const N: usize> = PubSubChannel<ChannelMutex, T, 1, N, 1>;
+type Pub<T, const N: usize> = Publisher<'static, ChannelMutex, T, 1, N, 2>;
+type Sub<T, const N: usize> = Subscriber<'static, ChannelMutex, T, 1, N, 2>;
+type Ch<T, const N: usize> = PubSubChannel<ChannelMutex, T, 1, N, 2>;
 
 // NOTE(elsuizo: 2024-07-28): creo que esto es la cantidad de tasks que pueden recibir como
 // parametro alguna de estas seniales
@@ -105,7 +105,7 @@ pub static BUTTON_CHANNEL: Ch<ButtonMessageType, BUTTONS_CHANNEL_CAP> = PubSubCh
 //     Mutex::new(RefCell::new(None));
 
 const CLOCK_CHANNEL_NUM: usize = 2;
-pub type ClockMessageType = (ClockState, String<256>);
+pub type ClockMessageType = (ClockState, String<37>);
 pub type ClockMessagePub = Pub<ClockMessageType, CLOCK_CHANNEL_NUM>;
 pub type ClockMessageSub = Sub<ClockMessageType, CLOCK_CHANNEL_NUM>;
 pub static CLOCK_STATE_CHANNEL: Ch<ClockMessageType, CLOCK_CHANNEL_NUM> = PubSubChannel::new();
@@ -130,13 +130,14 @@ pub async fn alarm_sound_test<'a>(buzzer: &'a mut Output<'static>) {
 pub async fn show_display_states(
     i2c: embassy_rp::i2c::I2c<'static, I2C1, embassy_rp::i2c::Blocking>,
     mut clock_state_signal_in: ClockMessageSub,
+    buzzer_pin: AnyPin,
 ) {
     // TODO(elsuizo: 2024-08-09): is that time ok???
     let mut ticker = Ticker::every(Duration::from_millis(100));
     let mut display: GraphicsMode<_> = Builder::new().connect_i2c(i2c).into();
     display.init().ok();
     display.flush().ok();
-    // let mut buzzer = Output::new(buzzer_pin, Level::Low);
+    let mut buzzer = Output::new(buzzer_pin, Level::Low);
 
     let normal = MonoTextStyleBuilder::new()
         .font(&FONT_9X15)
@@ -182,6 +183,10 @@ pub async fn show_display_states(
                     .draw(&mut display);
             }
             (ClockState::StopAlarm, _time) => {}
+            (ClockState::Alarm, _) => {
+                alarm_sound_test(&mut buzzer).await;
+                let _ = Text::new("Alarm!!!", Point::new(37, 13), normal).draw(&mut display);
+            }
         }
         display.flush().ok();
         display.clear();
@@ -192,7 +197,6 @@ pub async fn show_display_states(
 #[embassy_executor::task]
 pub async fn keypad2msg(keypad: Keypad, button_command: ButtonMessagePub) {
     let mut ticker = Ticker::every(Duration::from_millis(10));
-    button_command.publish_immediate(Msg::Continue);
     let keys = keypad.decompose();
 
     loop {
@@ -221,7 +225,7 @@ pub async fn keypad2msg(keypad: Keypad, button_command: ButtonMessagePub) {
                         (3, 0) => button_command.publish_immediate(Msg::Asterisk),
                         (3, 1) => button_command.publish_immediate(Msg::Zero),
                         (3, 2) => button_command.publish_immediate(Msg::Numeral),
-                        (3, 3) | (0, 0) => button_command.publish_immediate(Msg::D),
+                        (3, 3) => button_command.publish_immediate(Msg::D),
                         (_, _) => panic!("Nooo"),
                     }
                 }
@@ -233,11 +237,11 @@ pub async fn keypad2msg(keypad: Keypad, button_command: ButtonMessagePub) {
 }
 
 #[embassy_executor::task]
-pub async fn alarm_event(buzzer_pin: AnyPin) {
-    let mut buzzer = Output::new(buzzer_pin, Level::Low);
+pub async fn alarm_event(button_command: ButtonMessagePub) {
     loop {
         ALARM_TRIGGERED.wait().await;
-        alarm_sound_test(&mut buzzer).await;
+        button_command.publish(Msg::AlarmEvent).await;
+        info!("alarm trigged!!!");
     }
 }
 
@@ -299,10 +303,10 @@ async fn main(spawner: Spawner) {
     let now = DateTime {
         year: 2025,
         month: 6,
-        day: 12,
-        day_of_week: DayOfWeek::Thursday,
-        hour: 14,
-        minute: 7,
+        day: 15,
+        day_of_week: DayOfWeek::Sunday,
+        hour: 17,
+        minute: 17,
         second: 0,
     };
 
@@ -311,8 +315,8 @@ async fn main(spawner: Spawner) {
         month: None,
         day_of_week: None,
         day: None,
-        hour: Some(14),
-        minute: Some(8),
+        hour: Some(17),
+        minute: Some(18),
         second: None,
     };
 
@@ -331,10 +335,11 @@ async fn main(spawner: Spawner) {
     spawner.must_spawn(show_display_states(
         i2c,
         CLOCK_STATE_CHANNEL.subscriber().unwrap(),
+        buzzer,
     ));
 
     spawner.must_spawn(keypad2msg(keypad, BUTTON_CHANNEL.publisher().unwrap()));
-    spawner.must_spawn(alarm_event(buzzer));
+    spawner.must_spawn(alarm_event(BUTTON_CHANNEL.publisher().unwrap()));
 
     // Unmask the RTC IRQ so that the NVIC interrupt controller
     // will jump to the interrupt function when the interrupt occurs.
@@ -347,7 +352,6 @@ async fn main(spawner: Spawner) {
 
 #[interrupt]
 fn RTC_IRQ() {
-    cortex_m::peripheral::NVIC::mask(interrupt::RTC_IRQ);
-
     ALARM_TRIGGERED.signal(());
+    cortex_m::peripheral::NVIC::mask(interrupt::RTC_IRQ);
 }
