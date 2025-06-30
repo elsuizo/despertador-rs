@@ -185,7 +185,8 @@ pub async fn show_display_states(
             (ClockState::StopAlarm, _time) => {}
             (ClockState::Alarm, _) => {
                 alarm_sound_test(&mut buzzer).await;
-                let _ = Text::new("Alarm!!!", Point::new(37, 13), normal).draw(&mut display);
+                let _ = Text::new("Alarm!!!\n Press 0\nto disable", Point::new(37, 13), normal)
+                    .draw(&mut display);
             }
         }
         display.flush().ok();
@@ -236,6 +237,7 @@ pub async fn keypad2msg(keypad: Keypad, button_command: ButtonMessagePub) {
     }
 }
 
+// emits alarm event
 #[embassy_executor::task]
 pub async fn alarm_event(button_command: ButtonMessagePub) {
     loop {
@@ -245,8 +247,6 @@ pub async fn alarm_event(button_command: ButtonMessagePub) {
     }
 }
 
-// NOTE(elsuizo: 2024-07-12): esta seria la tarea que va a cambiar el estado del menu en el
-// display, dependiendo desde que botton le llega
 #[embassy_executor::task]
 pub async fn clock_controller(
     mut button_command_input: ButtonMessageSub,
@@ -303,10 +303,10 @@ async fn main(spawner: Spawner) {
     let now = DateTime {
         year: 2025,
         month: 6,
-        day: 15,
+        day: 29,
         day_of_week: DayOfWeek::Sunday,
-        hour: 17,
-        minute: 17,
+        hour: 13,
+        minute: 51,
         second: 0,
     };
 
@@ -315,8 +315,8 @@ async fn main(spawner: Spawner) {
         month: None,
         day_of_week: None,
         day: None,
-        hour: Some(17),
-        minute: Some(18),
+        hour: Some(13),
+        minute: Some(52),
         second: None,
     };
 
@@ -341,10 +341,6 @@ async fn main(spawner: Spawner) {
     spawner.must_spawn(keypad2msg(keypad, BUTTON_CHANNEL.publisher().unwrap()));
     spawner.must_spawn(alarm_event(BUTTON_CHANNEL.publisher().unwrap()));
 
-    // Unmask the RTC IRQ so that the NVIC interrupt controller
-    // will jump to the interrupt function when the interrupt occurs.
-    // We do this last so that the interrupt can't go off while
-    // it is in the middle of being configured
     unsafe {
         cortex_m::peripheral::NVIC::unmask(interrupt::RTC_IRQ);
     }
