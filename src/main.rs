@@ -25,17 +25,13 @@
 mod clock;
 use clock::Clock;
 use clock::{ClockFSM, ClockState};
-use core::cell::{Cell, RefCell};
-use embassy_sync::{channel, signal};
+use embassy_sync::signal;
 mod ui;
 use defmt::info;
-use embassy_rp::bind_interrupts;
 use embassy_rp::rtc::DayOfWeek;
 use embassy_rp::rtc::{DateTime, DateTimeFilter, Rtc};
-use embassy_sync::pubsub::publisher;
 use keypad::embedded_hal::digital::v2::InputPin;
 use keypad::{keypad_new, keypad_struct};
-use static_cell::StaticCell;
 use ui::{show_menu, Msg};
 // use defmt::*;
 use embassy_executor::Spawner;
@@ -62,7 +58,6 @@ use embedded_graphics::{
     prelude::*,
     text::Text,
 };
-use portable_atomic::{AtomicBool, Ordering};
 
 // TODO(elsuizo: 2024-08-09): ver como podemos sacar esto de aca ...
 keypad_struct! {
@@ -82,9 +77,9 @@ keypad_struct! {
     }
 }
 
-// use critical_section::Mutex;
 /// Signal for notifying about state changes
 static ALARM_TRIGGERED: signal::Signal<CriticalSectionRawMutex, ()> = signal::Signal::new();
+static SET_TIME_FLAG: signal::Signal<CriticalSectionRawMutex, ()> = signal::Signal::new();
 
 type ChannelMutex = CriticalSectionRawMutex;
 
@@ -95,14 +90,11 @@ type Ch<T, const N: usize> = PubSubChannel<ChannelMutex, T, 1, N, 2>;
 
 // NOTE(elsuizo: 2024-07-28): creo que esto es la cantidad de tasks que pueden recibir como
 // parametro alguna de estas seniales
-const BUTTONS_CHANNEL_CAP: usize = 2;
-pub type ButtonMessageType = Msg;
-pub type ButtonMessagePub = Pub<ButtonMessageType, BUTTONS_CHANNEL_CAP>;
-pub type ButtonMessageSub = Sub<ButtonMessageType, BUTTONS_CHANNEL_CAP>;
-pub static BUTTON_CHANNEL: Ch<ButtonMessageType, BUTTONS_CHANNEL_CAP> = PubSubChannel::new();
-
-// static GLOBAL_SHARED: Mutex<RefCell<Option<(Rtc<'static, RTC>, ClockFSM)>>> =
-//     Mutex::new(RefCell::new(None));
+const EVENTS_CHANNEL_CAP: usize = 2;
+pub type EventsMessageType = Msg;
+pub type EventsMessagePub = Pub<EventsMessageType, EVENTS_CHANNEL_CAP>;
+pub type EventsMessageSub = Sub<EventsMessageType, EVENTS_CHANNEL_CAP>;
+pub static EVENTS_CHANNEL: Ch<EventsMessageType, EVENTS_CHANNEL_CAP> = PubSubChannel::new();
 
 const CLOCK_CHANNEL_NUM: usize = 2;
 pub type ClockMessageType = (ClockState, String<37>);
@@ -132,8 +124,7 @@ pub async fn show_display_states(
     mut clock_state_signal_in: ClockMessageSub,
     buzzer_pin: AnyPin,
 ) {
-    // TODO(elsuizo: 2024-08-09): is that time ok???
-    let mut ticker = Ticker::every(Duration::from_millis(100));
+    let mut ticker = Ticker::every(Duration::from_millis(73));
     let mut display: GraphicsMode<_> = Builder::new().connect_i2c(i2c).into();
     display.init().ok();
     display.flush().ok();
@@ -171,7 +162,7 @@ pub async fn show_display_states(
                 show_menu(&mut display, (a, b, c)).expect("no se pudo mostrar ese estado");
             }
             (ClockState::TestSound, _) => {
-                // alarm_sound_test(&mut buzzer).await;
+                alarm_sound_test(&mut buzzer).await;
                 info!("Alarm!!!");
             }
             (ClockState::SetTime, _time) => {
@@ -196,7 +187,7 @@ pub async fn show_display_states(
 }
 
 #[embassy_executor::task]
-pub async fn keypad2msg(keypad: Keypad, button_command: ButtonMessagePub) {
+pub async fn keypad2msg(keypad: Keypad, button_event: EventsMessagePub) {
     let mut ticker = Ticker::every(Duration::from_millis(10));
     let keys = keypad.decompose();
 
@@ -207,49 +198,58 @@ pub async fn keypad2msg(keypad: Keypad, button_command: ButtonMessagePub) {
                     // let button_pressed = map.get(&(row_index, col_index));
                     // button_command.publish_immediate(*button_pressed.unwrap());
                     match (row_index, col_index) {
-                        (0, 0) => button_command.publish_immediate(Msg::One),
-                        (0, 1) => button_command.publish_immediate(Msg::Two),
+                        (0, 0) => button_event.publish_immediate(Msg::One),
+                        (0, 1) => button_event.publish_immediate(Msg::Two),
                         (0, 2) => {
                             let msg = Msg::Three;
-                            button_command.publish_immediate(msg);
+                            button_event.publish_immediate(msg);
                             info!("message: {}", msg);
                         }
-                        (0, 3) => button_command.publish_immediate(Msg::A),
-                        (1, 0) => button_command.publish_immediate(Msg::Four),
-                        (1, 1) => button_command.publish_immediate(Msg::Five),
-                        (1, 2) => button_command.publish_immediate(Msg::Six),
-                        (1, 3) => button_command.publish_immediate(Msg::B),
-                        (2, 0) => button_command.publish_immediate(Msg::Seven),
-                        (2, 1) => button_command.publish_immediate(Msg::Eight),
-                        (2, 2) => button_command.publish_immediate(Msg::Nine),
-                        (2, 3) => button_command.publish_immediate(Msg::C),
-                        (3, 0) => button_command.publish_immediate(Msg::Asterisk),
-                        (3, 1) => button_command.publish_immediate(Msg::Zero),
-                        (3, 2) => button_command.publish_immediate(Msg::Numeral),
-                        (3, 3) => button_command.publish_immediate(Msg::D),
+                        (0, 3) => button_event.publish_immediate(Msg::A),
+                        (1, 0) => button_event.publish_immediate(Msg::Four),
+                        (1, 1) => button_event.publish_immediate(Msg::Five),
+                        (1, 2) => button_event.publish_immediate(Msg::Six),
+                        (1, 3) => button_event.publish_immediate(Msg::B),
+                        (2, 0) => button_event.publish_immediate(Msg::Seven),
+                        (2, 1) => button_event.publish_immediate(Msg::Eight),
+                        (2, 2) => button_event.publish_immediate(Msg::Nine),
+                        (2, 3) => button_event.publish_immediate(Msg::C),
+                        (3, 0) => button_event.publish_immediate(Msg::Asterisk),
+                        (3, 1) => button_event.publish_immediate(Msg::Zero),
+                        (3, 2) => button_event.publish_immediate(Msg::Numeral),
+                        (3, 3) => button_event.publish_immediate(Msg::D),
                         (_, _) => panic!("Nooo"),
                     }
                 }
             }
         }
-        button_command.publish(Msg::Continue).await; // no button was pressed
+        button_event.publish(Msg::Continue).await; // no button was pressed
         ticker.next().await;
+    }
+}
+
+#[embassy_executor::task]
+pub async fn set_time_task(mut events: EventsMessageSub) {
+    loop {
+        SET_TIME_FLAG.wait().await;
+        let msg = events.next_message_pure().await;
+        info!("alarm trigged!!!");
     }
 }
 
 // emits alarm event
 #[embassy_executor::task]
-pub async fn alarm_event(button_command: ButtonMessagePub) {
+pub async fn alarm_event(events: EventsMessagePub) {
     loop {
         ALARM_TRIGGERED.wait().await;
-        button_command.publish(Msg::AlarmEvent).await;
+        events.publish(Msg::AlarmEvent).await;
         info!("alarm trigged!!!");
     }
 }
 
 #[embassy_executor::task]
 pub async fn clock_controller(
-    mut button_command_input: ButtonMessageSub,
+    mut events_input: EventsMessageSub,
     clock_state_signal_out: ClockMessagePub,
     clock: Clock<'static, RTC>,
     mut clock_fsm: ClockFSM,
@@ -258,7 +258,7 @@ pub async fn clock_controller(
 
     loop {
         let time = clock.read();
-        let message = button_command_input.next_message_pure().await;
+        let message = events_input.next_message_pure().await;
         clock_fsm.next_state(message);
         clock_state_signal_out.publish_immediate((clock_fsm.state, time));
         ticker.next().await;
@@ -293,8 +293,6 @@ async fn main(spawner: Spawner) {
     let scl = p.PIN_15;
 
     let i2c = i2c::I2c::new_blocking(p.I2C1, scl, sda, Config::default());
-
-    // let mut rtc = Rtc::new(p.RTC);
     led.set_high();
     //-------------------------------------------------------------------------
     //                        rtc init
@@ -315,9 +313,9 @@ async fn main(spawner: Spawner) {
         month: None,
         day_of_week: None,
         day: None,
-        hour: Some(13),
-        minute: Some(52),
-        second: None,
+        hour: None,
+        minute: None,
+        second: Some(7),
     };
 
     let fsm = ClockFSM::init(ClockState::DisplayTime);
@@ -327,7 +325,7 @@ async fn main(spawner: Spawner) {
     clock.set_alarm(alarm);
 
     spawner.must_spawn(clock_controller(
-        BUTTON_CHANNEL.subscriber().unwrap(),
+        EVENTS_CHANNEL.subscriber().unwrap(),
         CLOCK_STATE_CHANNEL.publisher().unwrap(),
         clock,
         fsm,
@@ -338,8 +336,8 @@ async fn main(spawner: Spawner) {
         buzzer,
     ));
 
-    spawner.must_spawn(keypad2msg(keypad, BUTTON_CHANNEL.publisher().unwrap()));
-    spawner.must_spawn(alarm_event(BUTTON_CHANNEL.publisher().unwrap()));
+    spawner.must_spawn(keypad2msg(keypad, EVENTS_CHANNEL.publisher().unwrap()));
+    spawner.must_spawn(alarm_event(EVENTS_CHANNEL.publisher().unwrap()));
 
     unsafe {
         cortex_m::peripheral::NVIC::unmask(interrupt::RTC_IRQ);

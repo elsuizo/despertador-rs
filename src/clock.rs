@@ -1,7 +1,8 @@
+use crate::ui::Msg;
 use crate::String;
-use crate::{ui::Msg, ALARM_TRIGGERED};
 use core::fmt::Write;
 use defmt::info;
+use embassy_rp::interrupt;
 use embassy_rp::rtc::{DateTime, DateTimeFilter, Instance, Rtc, RtcError};
 use serde::{Deserialize, Serialize};
 
@@ -60,13 +61,22 @@ impl ClockFSM {
             (TestSound, Continue) => TestSound,
             (TestSound, A) => DisplayTime,
             (TestSound, _) => TestSound,
+            // SetTime trigger
+            (Menu(true, false, false), Asterisk) => SetTime,
+            (SetTime, Continue) => SetTime,
 
             (Menu(false, false, false), Continue) => Menu(false, false, false),
             (Menu(false, false, false), A) => Menu(true, false, false),
             (Menu(false, false, false), D) => Menu(false, false, true),
             (StopAlarm, _) => DisplayTime,
             (Alarm, Continue) => Alarm,
-            (Alarm, Zero) => StopAlarm,
+            (Alarm, Zero) => {
+                info!("Alarm stopped");
+                unsafe {
+                    cortex_m::peripheral::NVIC::unmask(interrupt::RTC_IRQ);
+                }
+                StopAlarm
+            }
             (_, _) => DisplayTime,
         }
     }
@@ -79,18 +89,13 @@ pub struct ClockFromPc<'a> {
 
 pub struct Clock<'r, T: Instance> {
     pub rtc: Rtc<'r, T>,
-    alarm: Option<DateTime>,
-    periodic: bool,
+    alarm: Option<DateTimeFilter>,
 }
 
 impl<'r, T: Instance + 'r> Clock<'r, T> {
     pub fn new(user_time_set: DateTime, mut rtc: Rtc<'static, T>) -> Result<Self, RtcError> {
         rtc.set_datetime(user_time_set)?;
-        Ok(Self {
-            rtc,
-            alarm: None,
-            periodic: false,
-        })
+        Ok(Self { rtc, alarm: None })
     }
 
     pub fn read(&self) -> String<37> {

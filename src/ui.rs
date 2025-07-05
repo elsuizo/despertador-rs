@@ -30,8 +30,7 @@
 //----------------------------------------------------------------------------
 use defmt::Format;
 use embedded_graphics::{
-    image::{Image, ImageRawLE},
-    mono_font::{ascii::FONT_10X20, ascii::FONT_9X15, MonoTextStyleBuilder},
+    mono_font::{ascii::FONT_9X15, MonoTextStyleBuilder},
     pixelcolor::BinaryColor,
     prelude::*,
     text::Text,
