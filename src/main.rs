@@ -194,9 +194,7 @@ pub async fn keypad2msg(keypad: Keypad, button_event: EventsMessagePub) {
     loop {
         for (row_index, row) in keys.iter().enumerate() {
             for (col_index, key) in row.iter().enumerate() {
-                if key.is_low().unwrap() {
-                    // let button_pressed = map.get(&(row_index, col_index));
-                    // button_command.publish_immediate(*button_pressed.unwrap());
+                if key.is_low().expect("Some problem with the keypad") {
                     match (row_index, col_index) {
                         (0, 0) => button_event.publish_immediate(Msg::One),
                         (0, 1) => button_event.publish_immediate(Msg::Two),

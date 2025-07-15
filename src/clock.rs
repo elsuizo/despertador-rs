@@ -90,12 +90,21 @@ pub struct ClockFromPc<'a> {
 pub struct Clock<'r, T: Instance> {
     pub rtc: Rtc<'r, T>,
     alarm: Option<DateTimeFilter>,
+    periodic: bool,
 }
 
 impl<'r, T: Instance + 'r> Clock<'r, T> {
-    pub fn new(user_time_set: DateTime, mut rtc: Rtc<'static, T>) -> Result<Self, RtcError> {
+    pub fn new(
+        user_time_set: DateTime,
+        alarm: Option<DateTimeFilter>,
+        mut rtc: Rtc<'static, T>,
+    ) -> Result<Self, RtcError> {
         rtc.set_datetime(user_time_set)?;
-        Ok(Self { rtc, alarm: None })
+        Ok(Self {
+            rtc,
+            alarm,
+            periodic: false,
+        })
     }
 
     pub fn read(&self) -> String<37> {
