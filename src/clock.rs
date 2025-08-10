@@ -94,15 +94,11 @@ pub struct Clock<'r, T: Instance> {
 }
 
 impl<'r, T: Instance + 'r> Clock<'r, T> {
-    pub fn new(
-        user_time_set: DateTime,
-        alarm: Option<DateTimeFilter>,
-        mut rtc: Rtc<'static, T>,
-    ) -> Result<Self, RtcError> {
+    pub fn new(user_time_set: DateTime, mut rtc: Rtc<'static, T>) -> Result<Self, RtcError> {
         rtc.set_datetime(user_time_set)?;
         Ok(Self {
             rtc,
-            alarm,
+            alarm: None,
             periodic: false,
         })
     }
@@ -122,12 +118,15 @@ impl<'r, T: Instance + 'r> Clock<'r, T> {
         time
     }
 
-    // TODO(elsuizo: 2024-08-17): creo que esto tendria que ser un array de `DateTimeFilter`
-    pub fn set_alarm(&mut self, alarms: DateTimeFilter) {
-        self.rtc.schedule_alarm(alarms);
+    pub fn set_alarm(&mut self, alarm: DateTimeFilter) {
+        self.rtc.schedule_alarm(alarm);
     }
 
     pub fn disable_alarm(&mut self) {
         self.rtc.disable_alarm();
+    }
+
+    pub fn enable_periodic(&mut self) {
+        self.periodic = true
     }
 }

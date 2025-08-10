@@ -79,7 +79,7 @@ keypad_struct! {
 
 /// Signal for notifying about state changes
 static ALARM_TRIGGERED: signal::Signal<CriticalSectionRawMutex, ()> = signal::Signal::new();
-static SET_TIME_FLAG: signal::Signal<CriticalSectionRawMutex, ()> = signal::Signal::new();
+static SET_ALARM_FLAG: signal::Signal<CriticalSectionRawMutex, ()> = signal::Signal::new();
 
 type ChannelMutex = CriticalSectionRawMutex;
 
@@ -227,9 +227,9 @@ pub async fn keypad2msg(keypad: Keypad, button_event: EventsMessagePub) {
 }
 
 #[embassy_executor::task]
-pub async fn set_time_task(mut events: EventsMessageSub) {
+pub async fn set_alarm(mut events: EventsMessageSub) {
     loop {
-        SET_TIME_FLAG.wait().await;
+        SET_ALARM_FLAG.wait().await;
         let msg = events.next_message_pure().await;
         info!("alarm trigged!!!");
     }
@@ -319,8 +319,7 @@ async fn main(spawner: Spawner) {
     let fsm = ClockFSM::init(ClockState::DisplayTime);
 
     let rtc = Rtc::new(p.RTC);
-    let mut clock = Clock::new(now, rtc).expect("Error creating the clock type");
-    clock.set_alarm(alarm);
+    let clock = Clock::new(now, rtc).expect("Error creating the clock type");
 
     spawner.must_spawn(clock_controller(
         EVENTS_CHANNEL.subscriber().unwrap(),
