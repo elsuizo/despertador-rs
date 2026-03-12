@@ -25,6 +25,7 @@
 mod clock;
 use clock::Clock;
 use clock::{ClockFSM, ClockState};
+use embassy_rp::bind_interrupts;
 use embassy_sync::signal;
 mod ui;
 use defmt::info;
@@ -59,6 +60,10 @@ use embedded_graphics::{
     text::Text,
 };
 
+// Bind the RTC interrupt to the handler
+bind_interrupts!(struct Irqs {
+    RTC_IRQ => embassy_rp::rtc::InterruptHandler;
+});
 // TODO(elsuizo: 2024-08-09): ver como podemos sacar esto de aca ...
 keypad_struct! {
     pub struct Keypad< Error = Infallible> {
@@ -122,13 +127,12 @@ pub async fn alarm_sound_test<'a>(buzzer: &'a mut Output<'static>) {
 pub async fn show_display_states(
     i2c: embassy_rp::i2c::I2c<'static, I2C1, embassy_rp::i2c::Blocking>,
     mut clock_state_signal_in: ClockMessageSub,
-    buzzer_pin: AnyPin,
+    mut buzzer: Output<'static>,
 ) {
     let mut ticker = Ticker::every(Duration::from_millis(73));
     let mut display: GraphicsMode<_> = Builder::new().connect_i2c(i2c).into();
     display.init().ok();
     display.flush().ok();
-    let mut buzzer = Output::new(buzzer_pin, Level::Low);
 
     let normal = MonoTextStyleBuilder::new()
         .font(&FONT_9X15)
@@ -256,6 +260,7 @@ pub async fn clock_controller(
 
     loop {
         let time = clock.read();
+
         let message = events_input.next_message_pure().await;
         clock_fsm.next_state(message);
         clock_state_signal_out.publish_immediate((clock_fsm.state, time));
@@ -268,19 +273,19 @@ async fn main(spawner: Spawner) {
     info!("init program");
     let p = embassy_rp::init(Default::default());
     let mut led = Output::new(p.PIN_25, Level::Low);
-    let buzzer = AnyPin::from(p.PIN_8);
+    let buzzer = Output::new(p.PIN_8, Level::Low);
     let keypad = keypad_new!(Keypad {
         rows: (
-            Input::new(AnyPin::from(p.PIN_0), Pull::Up),
-            Input::new(AnyPin::from(p.PIN_1), Pull::Up),
-            Input::new(AnyPin::from(p.PIN_2), Pull::Up),
-            Input::new(AnyPin::from(p.PIN_3), Pull::Up),
+            Input::new(p.PIN_0, Pull::Up),
+            Input::new(p.PIN_1, Pull::Up),
+            Input::new(p.PIN_2, Pull::Up),
+            Input::new(p.PIN_3, Pull::Up),
         ),
         columns: (
-            Output::new(AnyPin::from(p.PIN_4), Level::Low),
-            Output::new(AnyPin::from(p.PIN_5), Level::Low),
-            Output::new(AnyPin::from(p.PIN_6), Level::Low),
-            Output::new(AnyPin::from(p.PIN_7), Level::Low),
+            Output::new(p.PIN_4, Level::Low),
+            Output::new(p.PIN_5, Level::Low),
+            Output::new(p.PIN_6, Level::Low),
+            Output::new(p.PIN_7, Level::Low),
         ),
     });
     info!("Configuring the i2c");
@@ -318,7 +323,7 @@ async fn main(spawner: Spawner) {
 
     let fsm = ClockFSM::init(ClockState::DisplayTime);
 
-    let rtc = Rtc::new(p.RTC);
+    let mut rtc = Rtc::new(p.RTC, Irqs);
     let clock = Clock::new(now, rtc).expect("Error creating the clock type");
 
     spawner.must_spawn(clock_controller(
@@ -336,13 +341,8 @@ async fn main(spawner: Spawner) {
     spawner.must_spawn(keypad2msg(keypad, EVENTS_CHANNEL.publisher().unwrap()));
     spawner.must_spawn(alarm_event(EVENTS_CHANNEL.publisher().unwrap()));
 
-    unsafe {
-        cortex_m::peripheral::NVIC::unmask(interrupt::RTC_IRQ);
-    }
-}
-
-#[interrupt]
-fn RTC_IRQ() {
-    ALARM_TRIGGERED.signal(());
-    cortex_m::peripheral::NVIC::mask(interrupt::RTC_IRQ);
+    // TODO(elsuizo: 2026-03-12): no se si esto va todavia, porque cambio la API de la alarma
+    // unsafe {
+    //     cortex_m::peripheral::NVIC::unmask(interrupt::RTC_IRQ);
+    // }
 }
