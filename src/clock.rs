@@ -11,7 +11,7 @@ pub enum ClockState {
     DisplayTime,
     SetTime,
     DisplayAlarm,
-    SetAlarm,
+    SetAlarm(bool),
     ShowImage,
     TestSound,
     StopAlarm,
@@ -65,16 +65,22 @@ impl ClockFSM {
             (Menu(true, false, false), Asterisk) => SetTime,
             (SetTime, Continue) => SetTime,
 
+            // SetAlarm trigger
+            (Menu(false, true, false), Asterisk) => SetAlarm(true),
+            (SetAlarm(state), Continue) => SetAlarm(state),
+            // disable alarm
+            (SetAlarm(true), Asterisk) => SetAlarm(false),
+            // enable alarm again
+            (SetAlarm(false), Asterisk) => SetAlarm(true),
+
             (Menu(false, false, false), Continue) => Menu(false, false, false),
             (Menu(false, false, false), A) => Menu(true, false, false),
             (Menu(false, false, false), D) => Menu(false, false, true),
-            (StopAlarm, _) => DisplayTime,
+            // (StopAlarm, _) => DisplayTime,
+            (DisplayAlarm, Continue) => DisplayAlarm,
             (Alarm, Continue) => Alarm,
             (Alarm, Zero) => {
                 info!("Alarm stopped");
-                unsafe {
-                    cortex_m::peripheral::NVIC::unmask(interrupt::RTC_IRQ);
-                }
                 StopAlarm
             }
             (_, _) => DisplayTime,

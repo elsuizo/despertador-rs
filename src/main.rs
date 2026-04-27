@@ -25,6 +25,7 @@
 mod clock;
 use clock::Clock;
 use clock::{ClockFSM, ClockState};
+use core::fmt::Write;
 use embassy_rp::bind_interrupts;
 use embassy_sync::signal;
 mod ui;
@@ -84,7 +85,7 @@ keypad_struct! {
 
 /// Signal for notifying about state changes
 static ALARM_TRIGGERED: signal::Signal<CriticalSectionRawMutex, ()> = signal::Signal::new();
-static SET_ALARM_FLAG: signal::Signal<CriticalSectionRawMutex, ()> = signal::Signal::new();
+// static SET_ALARM_FLAG: signal::Signal<CriticalSectionRawMutex, ()> = signal::Signal::new();
 
 type ChannelMutex = CriticalSectionRawMutex;
 
@@ -163,19 +164,21 @@ pub async fn show_display_states(
             }
             // show the display menus
             (ClockState::Menu(a, b, c), _) => {
-                show_menu(&mut display, (a, b, c)).expect("no se pudo mostrar ese estado");
+                show_menu(&mut display, (a, b, c)).expect("Error bad state");
             }
             (ClockState::TestSound, _) => {
                 alarm_sound_test(&mut buzzer).await;
                 info!("Alarm!!!");
             }
             (ClockState::SetTime, _time) => {
-                let _ = Text::new("Settime under construction!!!", Point::new(37, 13), normal)
+                let _ = Text::new("Settime under\nconstruction!!!", Point::new(3, 13), normal)
                     .draw(&mut display);
             }
-            (ClockState::SetAlarm, _time) => {
-                let _ = Text::new("SetAlarm under construction!!!", Point::new(37, 13), normal)
-                    .draw(&mut display);
+            (ClockState::SetAlarm(state), _time) => {
+                let mut out: String<37> = String::new();
+                // info!("Alarm state: {}", state);
+                write!(&mut out, "Alarm state:\n{state}",).unwrap();
+                let _ = Text::new(&out, Point::new(3, 13), normal).draw(&mut display);
             }
             (ClockState::StopAlarm, _time) => {}
             (ClockState::Alarm, _) => {
@@ -233,7 +236,6 @@ pub async fn keypad2msg(keypad: Keypad, button_event: EventsMessagePub) {
 #[embassy_executor::task]
 pub async fn set_alarm(mut events: EventsMessageSub) {
     loop {
-        SET_ALARM_FLAG.wait().await;
         let msg = events.next_message_pure().await;
         info!("alarm trigged!!!");
     }
