@@ -26,7 +26,7 @@ mod clock;
 use clock::Clock;
 use clock::{ClockFSM, ClockState};
 use core::fmt::Write;
-use embassy_futures::select::{select, Either};
+use embassy_futures::select::{select, select3, Either, Either3};
 use embassy_rp::bind_interrupts;
 use embassy_sync::signal;
 mod ui;
@@ -284,18 +284,19 @@ pub async fn clock_controller(
     mut clock: Clock<'static, RTC>,
     mut clock_fsm: ClockFSM,
 ) {
-    let mut ticker = Ticker::every(Duration::from_millis(30));
+    //let mut ticker = Ticker::every(Duration::from_millis(30));
 
     loop {
-        let time = clock.read();
-
-        let message = events_input.next_message_pure().await;
-        clock_fsm.next_state(message);
-        clock_state_signal_out.publish_immediate((clock_fsm.state, time));
-        ticker.next().await;
-        match select(Timer::after_secs(3), clock.rtc.wait_for_alarm()).await {
+        //ticker.next().await;
+        match select3(
+            Timer::after_secs(3),
+            clock.rtc.wait_for_alarm(),
+            Timer::after_millis(30),
+        )
+        .await
+        {
             // Timer expired
-            Either::First(_) => {
+            Either3::First(_) => {
                 let dt = clock.rtc.now().unwrap();
                 info!(
                     "Now: {}-{:02}-{:02} {}:{:02}:{:02}",
@@ -310,13 +311,20 @@ pub async fn clock_controller(
                 //}
             }
             // Alarm triggered
-            Either::Second(_) => {
+            Either3::Second(_) => {
                 let dt = clock.rtc.now().unwrap();
                 info!(
                     "ALARM TRIGGERED! Now: {}-{:02}-{:02} {}:{:02}:{:02}",
                     dt.year, dt.month, dt.day, dt.hour, dt.minute, dt.second,
                 );
                 events.publish(Msg::AlarmEvent).await;
+            }
+            Either3::Third(_) => {
+                let time = clock.read();
+
+                let message = events_input.next_message_pure().await;
+                clock_fsm.next_state(message);
+                clock_state_signal_out.publish_immediate((clock_fsm.state, time));
             }
         }
     }
