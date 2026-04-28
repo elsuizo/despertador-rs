@@ -125,11 +125,13 @@ impl<'r, T: Instance + 'r> Clock<'r, T> {
     }
 
     pub fn set_alarm(&mut self, alarm: DateTimeFilter) {
+        self.alarm = Some(alarm);
         self.rtc.schedule_alarm(alarm);
     }
 
     pub fn disable_alarm(&mut self) {
         self.rtc.disable_alarm();
+        self.alarm = None;
     }
 
     pub fn enable_periodic(&mut self) {

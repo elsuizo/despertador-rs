@@ -26,6 +26,7 @@ mod clock;
 use clock::Clock;
 use clock::{ClockFSM, ClockState};
 use core::fmt::Write;
+use embassy_futures::select::{select, Either};
 use embassy_rp::bind_interrupts;
 use embassy_sync::signal;
 mod ui;
@@ -233,29 +234,54 @@ pub async fn keypad2msg(keypad: Keypad, button_event: EventsMessagePub) {
     }
 }
 
-#[embassy_executor::task]
-pub async fn set_alarm(mut events: EventsMessageSub) {
-    loop {
-        let msg = events.next_message_pure().await;
-        info!("alarm trigged!!!");
-    }
-}
+//#[embassy_executor::task]
+//pub async fn set_alarm(mut events: EventsMessageSub) {
+//    loop {
+//        let msg = events.next_message_pure().await;
+//        info!("alarm trigged!!!");
+//    }
+//}
 
 // emits alarm event
 #[embassy_executor::task]
-pub async fn alarm_event(events: EventsMessagePub) {
+pub async fn alarm_event(events: EventsMessagePub, mut clock: Clock<'static, RTC>) {
     loop {
-        ALARM_TRIGGERED.wait().await;
-        events.publish(Msg::AlarmEvent).await;
-        info!("alarm trigged!!!");
+        // Wait for 3 seconds or until the alarm is triggered
+        match select(Timer::after_secs(3), clock.rtc.wait_for_alarm()).await {
+            // Timer expired
+            Either::First(_) => {
+                let dt = clock.rtc.now().unwrap();
+                info!(
+                    "Now: {}-{:02}-{:02} {}:{:02}:{:02}",
+                    dt.year, dt.month, dt.day, dt.hour, dt.minute, dt.second,
+                );
+
+                // See if the alarm is already scheduled, if not, schedule it
+                //if rtc.alarm_scheduled().is_none() {
+                //    info!("Scheduling alarm for 30 seconds from now");
+                //    rtc.schedule_alarm(DateTimeFilter::default().second((dt.second + 30) % 60));
+                //    info!("Alarm scheduled: {}", rtc.alarm_scheduled().unwrap());
+                //}
+            }
+            // Alarm triggered
+            Either::Second(_) => {
+                let dt = clock.rtc.now().unwrap();
+                info!(
+                    "ALARM TRIGGERED! Now: {}-{:02}-{:02} {}:{:02}:{:02}",
+                    dt.year, dt.month, dt.day, dt.hour, dt.minute, dt.second,
+                );
+                events.publish(Msg::AlarmEvent).await;
+            }
+        }
     }
 }
 
 #[embassy_executor::task]
 pub async fn clock_controller(
     mut events_input: EventsMessageSub,
+    events: EventsMessagePub,
     clock_state_signal_out: ClockMessagePub,
-    clock: Clock<'static, RTC>,
+    mut clock: Clock<'static, RTC>,
     mut clock_fsm: ClockFSM,
 ) {
     let mut ticker = Ticker::every(Duration::from_millis(30));
@@ -267,6 +293,32 @@ pub async fn clock_controller(
         clock_fsm.next_state(message);
         clock_state_signal_out.publish_immediate((clock_fsm.state, time));
         ticker.next().await;
+        match select(Timer::after_secs(3), clock.rtc.wait_for_alarm()).await {
+            // Timer expired
+            Either::First(_) => {
+                let dt = clock.rtc.now().unwrap();
+                info!(
+                    "Now: {}-{:02}-{:02} {}:{:02}:{:02}",
+                    dt.year, dt.month, dt.day, dt.hour, dt.minute, dt.second,
+                );
+
+                // See if the alarm is already scheduled, if not, schedule it
+                //if rtc.alarm_scheduled().is_none() {
+                //    info!("Scheduling alarm for 30 seconds from now");
+                //    rtc.schedule_alarm(DateTimeFilter::default().second((dt.second + 30) % 60));
+                //    info!("Alarm scheduled: {}", rtc.alarm_scheduled().unwrap());
+                //}
+            }
+            // Alarm triggered
+            Either::Second(_) => {
+                let dt = clock.rtc.now().unwrap();
+                info!(
+                    "ALARM TRIGGERED! Now: {}-{:02}-{:02} {}:{:02}:{:02}",
+                    dt.year, dt.month, dt.day, dt.hour, dt.minute, dt.second,
+                );
+                events.publish(Msg::AlarmEvent).await;
+            }
+        }
     }
 }
 
@@ -318,18 +370,20 @@ async fn main(spawner: Spawner) {
         month: None,
         day_of_week: None,
         day: None,
-        hour: None,
-        minute: None,
-        second: Some(7),
+        hour: Some(13),
+        minute: Some(53),
+        second: None,
     };
 
     let fsm = ClockFSM::init(ClockState::DisplayTime);
 
-    let mut rtc = Rtc::new(p.RTC, Irqs);
-    let clock = Clock::new(now, rtc).expect("Error creating the clock type");
+    let rtc = Rtc::new(p.RTC, Irqs);
+    let mut clock = Clock::new(now, rtc).expect("Error creating the clock type");
+    clock.set_alarm(alarm);
 
     spawner.must_spawn(clock_controller(
         EVENTS_CHANNEL.subscriber().unwrap(),
+        EVENTS_CHANNEL.publisher().unwrap(),
         CLOCK_STATE_CHANNEL.publisher().unwrap(),
         clock,
         fsm,
@@ -341,10 +395,5 @@ async fn main(spawner: Spawner) {
     ));
 
     spawner.must_spawn(keypad2msg(keypad, EVENTS_CHANNEL.publisher().unwrap()));
-    spawner.must_spawn(alarm_event(EVENTS_CHANNEL.publisher().unwrap()));
-
-    // TODO(elsuizo: 2026-03-12): no se si esto va todavia, porque cambio la API de la alarma
-    // unsafe {
-    //     cortex_m::peripheral::NVIC::unmask(interrupt::RTC_IRQ);
-    // }
+    //spawner.must_spawn(alarm_event(EVENTS_CHANNEL.publisher().unwrap(), clock));
 }
