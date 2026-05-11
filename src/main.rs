@@ -7,6 +7,7 @@
 // - [ ] hay que hacer un mod que tenga todo lo del clock
 // - [ ] hay que hacer un mod que tenga todo lo del display
 // - [ ] hay que hacer un mod que tenga todo lo de la ui
+// - [ ] hay que sacar la dependencia de keypad y hacerla nosotros con arrays
 // - [ ] hacer un menu para el lcd
 //      - [X] tiene que tener un modo para mostrar la hora
 //          - [X] Hacer una tarea que tenga a los botones que emitan una senial cuando cambian de
@@ -84,6 +85,7 @@ keypad_struct! {
     }
 }
 
+/// Como puede ser quenad
 /// Signal for notifying about state changes
 static ALARM_TRIGGERED: signal::Signal<CriticalSectionRawMutex, ()> = signal::Signal::new();
 // static SET_ALARM_FLAG: signal::Signal<CriticalSectionRawMutex, ()> = signal::Signal::new();
@@ -243,6 +245,7 @@ pub async fn keypad2msg(keypad: Keypad, button_event: EventsMessagePub) {
 //}
 
 // emits alarm event
+
 #[embassy_executor::task]
 pub async fn alarm_event(events: EventsMessagePub, mut clock: Clock<'static, RTC>) {
     loop {
@@ -279,54 +282,30 @@ pub async fn alarm_event(events: EventsMessagePub, mut clock: Clock<'static, RTC
 #[embassy_executor::task]
 pub async fn clock_controller(
     mut events_input: EventsMessageSub,
-    events: EventsMessagePub,
     clock_state_signal_out: ClockMessagePub,
     mut clock: Clock<'static, RTC>,
     mut clock_fsm: ClockFSM,
 ) {
-    //let mut ticker = Ticker::every(Duration::from_millis(30));
+    let mut ticker = Ticker::every(Duration::from_millis(100));
 
     loop {
-        //ticker.next().await;
-        match select3(
-            Timer::after_secs(3),
-            clock.rtc.wait_for_alarm(),
-            Timer::after_millis(30),
-        )
-        .await
-        {
-            // Timer expired
-            Either3::First(_) => {
-                let dt = clock.rtc.now().unwrap();
-                info!(
-                    "Now: {}-{:02}-{:02} {}:{:02}:{:02}",
-                    dt.year, dt.month, dt.day, dt.hour, dt.minute, dt.second,
-                );
-
-                // See if the alarm is already scheduled, if not, schedule it
-                //if rtc.alarm_scheduled().is_none() {
-                //    info!("Scheduling alarm for 30 seconds from now");
-                //    rtc.schedule_alarm(DateTimeFilter::default().second((dt.second + 30) % 60));
-                //    info!("Alarm scheduled: {}", rtc.alarm_scheduled().unwrap());
-                //}
-            }
-            // Alarm triggered
-            Either3::Second(_) => {
-                let dt = clock.rtc.now().unwrap();
-                info!(
-                    "ALARM TRIGGERED! Now: {}-{:02}-{:02} {}:{:02}:{:02}",
-                    dt.year, dt.month, dt.day, dt.hour, dt.minute, dt.second,
-                );
-                events.publish(Msg::AlarmEvent).await;
-            }
-            Either3::Third(_) => {
+        match select(ticker.next(), clock.wait_alarm()).await {
+            Either::First(_) => {
                 let time = clock.read();
-
                 let message = events_input.next_message_pure().await;
                 clock_fsm.next_state(message);
                 clock_state_signal_out.publish_immediate((clock_fsm.state, time));
             }
+            Either::Second(_) => {
+                let time = clock.read();
+                let message = Msg::AlarmEvent;
+                clock_fsm.next_state(message);
+                clock_state_signal_out.publish_immediate((clock_fsm.state, time));
+                info!("Alarma!!!")
+            }
         }
+        //ticker.next().await;
+        //clock.wait_alarm().await;
     }
 }
 
@@ -379,7 +358,7 @@ async fn main(spawner: Spawner) {
         day_of_week: None,
         day: None,
         hour: Some(13),
-        minute: Some(53),
+        minute: Some(52),
         second: None,
     };
 
@@ -391,7 +370,6 @@ async fn main(spawner: Spawner) {
 
     spawner.must_spawn(clock_controller(
         EVENTS_CHANNEL.subscriber().unwrap(),
-        EVENTS_CHANNEL.publisher().unwrap(),
         CLOCK_STATE_CHANNEL.publisher().unwrap(),
         clock,
         fsm,

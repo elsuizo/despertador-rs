@@ -1,8 +1,8 @@
 use crate::ui::Msg;
+use crate::EventsMessageSub;
 use crate::String;
 use core::fmt::Write;
 use defmt::info;
-use embassy_rp::interrupt;
 use embassy_rp::rtc::{DateTime, DateTimeFilter, Instance, Rtc, RtcError};
 use serde::{Deserialize, Serialize};
 
@@ -87,7 +87,7 @@ impl ClockFSM {
         }
     }
 }
-// TODO(elsuizo: 2024-08-07): ver como se puede hacer para serialize el `DateTime`
+// todo(elsuizo: 2024-08-07): ver como se puede hacer para serialize el `DateTime`
 #[derive(Serialize, Deserialize, Debug, Eq, PartialEq)]
 pub struct ClockFromPc<'a> {
     time: &'a [u8],
@@ -136,5 +136,9 @@ impl<'r, T: Instance + 'r> Clock<'r, T> {
 
     pub fn enable_periodic(&mut self) {
         self.periodic = true
+    }
+
+    pub async fn wait_alarm(&mut self) {
+        self.rtc.wait_for_alarm().await
     }
 }
