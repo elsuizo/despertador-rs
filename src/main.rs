@@ -41,9 +41,8 @@ use ui::{show_menu, Msg};
 use embassy_executor::Spawner;
 // use embassy_futures::select::{select, select3, Either};
 use core::convert::Infallible;
-use embassy_rp::gpio::{AnyPin, Input, Level, Output, Pull};
+use embassy_rp::gpio::{Input, Level, Output, Pull};
 use embassy_rp::i2c::{self, Config};
-use embassy_rp::interrupt;
 use embassy_rp::peripherals::I2C1;
 use embassy_rp::peripherals::RTC;
 use embassy_sync::{
@@ -85,10 +84,8 @@ keypad_struct! {
     }
 }
 
-/// Como puede ser quenad
 /// Signal for notifying about state changes
 static ALARM_TRIGGERED: signal::Signal<CriticalSectionRawMutex, ()> = signal::Signal::new();
-// static SET_ALARM_FLAG: signal::Signal<CriticalSectionRawMutex, ()> = signal::Signal::new();
 
 type ChannelMutex = CriticalSectionRawMutex;
 
@@ -106,10 +103,16 @@ pub type EventsMessageSub = Sub<EventsMessageType, EVENTS_CHANNEL_CAP>;
 pub static EVENTS_CHANNEL: Ch<EventsMessageType, EVENTS_CHANNEL_CAP> = PubSubChannel::new();
 
 const CLOCK_CHANNEL_NUM: usize = 2;
-pub type ClockMessageType = (ClockState, String<37>);
+pub type ClockMessageType = ClockState;
 pub type ClockMessagePub = Pub<ClockMessageType, CLOCK_CHANNEL_NUM>;
 pub type ClockMessageSub = Sub<ClockMessageType, CLOCK_CHANNEL_NUM>;
 pub static CLOCK_STATE_CHANNEL: Ch<ClockMessageType, CLOCK_CHANNEL_NUM> = PubSubChannel::new();
+
+const TIME_CHANNEL_CAP: usize = 2;
+pub type TimeMessageType = String<37>;
+pub type TimeMessagePub = Pub<TimeMessageType, TIME_CHANNEL_CAP>;
+pub type TimeMessageSub = Sub<TimeMessageType, TIME_CHANNEL_CAP>;
+pub static TIME_STATE_CHANNEL: Ch<TimeMessageType, TIME_CHANNEL_CAP> = PubSubChannel::new();
 
 pub async fn alarm_sound_test<'a>(buzzer: &'a mut Output<'static>) {
     // TODO(elsuizo: 2024-08-17): hacer que esto sea un sonido real de alarma
@@ -131,7 +134,7 @@ pub async fn alarm_sound_test<'a>(buzzer: &'a mut Output<'static>) {
 pub async fn show_display_states(
     i2c: embassy_rp::i2c::I2c<'static, I2C1, embassy_rp::i2c::Blocking>,
     mut clock_state_signal_in: ClockMessageSub,
-    mut buzzer: Output<'static>,
+    mut time_signal_in: TimeMessageSub,
 ) {
     let mut ticker = Ticker::every(Duration::from_millis(73));
     let mut display: GraphicsMode<_> = Builder::new().connect_i2c(i2c).into();
@@ -151,41 +154,40 @@ pub async fn show_display_states(
     let logo_image = ImageRawLE::new(include_bytes!("../Images/rust.raw"), 64);
 
     // TODO(elsuizo: 2024-08-13): this menus items should be a function...
-    // TODO(elsuizo: 2025-06-08): we need the `time` variable only in few callings maybe is not a
-    // good idea transmit over ...
     loop {
         match clock_state_signal_in.next_message_pure().await {
-            (ClockState::DisplayTime, time) => {
+            ClockState::DisplayTime => {
+                let time = time_signal_in.next_message_pure().await;
                 let _ = Text::new(&time, Point::new(30, 13), normal).draw(&mut display);
             }
-            (ClockState::ShowImage, _) => {
+            ClockState::ShowImage => {
                 let _ = Image::new(&logo_image, Point::new(32, 0)).draw(&mut display);
             }
             // TODO(elsuizo: 2024-08-13): here should display the alarm date...
-            (ClockState::DisplayAlarm, _) => {
+            ClockState::DisplayAlarm => {
                 let _ = Text::new("Alarm!!!", Point::new(37, 13), normal).draw(&mut display);
             }
             // show the display menus
-            (ClockState::Menu(a, b, c), _) => {
+            ClockState::Menu(a, b, c) => {
                 show_menu(&mut display, (a, b, c)).expect("Error bad state");
             }
-            (ClockState::TestSound, _) => {
-                alarm_sound_test(&mut buzzer).await;
-                info!("Alarm!!!");
+            ClockState::TestSound => {
+                info!("Sound Test!!!")
+                //alarm_sound_test(&mut buzzer).await;
             }
-            (ClockState::SetTime, _time) => {
+            ClockState::SetTime => {
                 let _ = Text::new("Settime under\nconstruction!!!", Point::new(3, 13), normal)
                     .draw(&mut display);
             }
-            (ClockState::SetAlarm(state), _time) => {
+            ClockState::SetAlarm(state) => {
                 let mut out: String<37> = String::new();
                 // info!("Alarm state: {}", state);
                 write!(&mut out, "Alarm state:\n{state}",).unwrap();
                 let _ = Text::new(&out, Point::new(3, 13), normal).draw(&mut display);
             }
-            (ClockState::StopAlarm, _time) => {}
-            (ClockState::Alarm, _) => {
-                alarm_sound_test(&mut buzzer).await;
+            ClockState::StopAlarm => {}
+            ClockState::Alarm => {
+                //alarm_sound_test(&mut buzzer).await;
                 let _ = Text::new("Alarm!!!\n Press 0\nto disable", Point::new(37, 13), normal)
                     .draw(&mut display);
             }
@@ -236,76 +238,53 @@ pub async fn keypad2msg(keypad: Keypad, button_event: EventsMessagePub) {
     }
 }
 
-//#[embassy_executor::task]
-//pub async fn set_alarm(mut events: EventsMessageSub) {
-//    loop {
-//        let msg = events.next_message_pure().await;
-//        info!("alarm trigged!!!");
-//    }
-//}
-
-// emits alarm event
-
 #[embassy_executor::task]
-pub async fn alarm_event(events: EventsMessagePub, mut clock: Clock<'static, RTC>) {
+pub async fn clock_state_task(
+    mut events_input: EventsMessageSub,
+    clock_state_signal_out: ClockMessagePub,
+    mut clock_fsm: ClockFSM,
+) {
+    let mut ticker = Ticker::every(Duration::from_millis(30));
     loop {
-        // Wait for 3 seconds or until the alarm is triggered
-        match select(Timer::after_secs(3), clock.rtc.wait_for_alarm()).await {
-            // Timer expired
-            Either::First(_) => {
-                let dt = clock.rtc.now().unwrap();
-                info!(
-                    "Now: {}-{:02}-{:02} {}:{:02}:{:02}",
-                    dt.year, dt.month, dt.day, dt.hour, dt.minute, dt.second,
-                );
-
-                // See if the alarm is already scheduled, if not, schedule it
-                //if rtc.alarm_scheduled().is_none() {
-                //    info!("Scheduling alarm for 30 seconds from now");
-                //    rtc.schedule_alarm(DateTimeFilter::default().second((dt.second + 30) % 60));
-                //    info!("Alarm scheduled: {}", rtc.alarm_scheduled().unwrap());
-                //}
-            }
-            // Alarm triggered
-            Either::Second(_) => {
-                let dt = clock.rtc.now().unwrap();
-                info!(
-                    "ALARM TRIGGERED! Now: {}-{:02}-{:02} {}:{:02}:{:02}",
-                    dt.year, dt.month, dt.day, dt.hour, dt.minute, dt.second,
-                );
-                events.publish(Msg::AlarmEvent).await;
-            }
-        }
+        let message = events_input.next_message_pure().await;
+        clock_fsm.next_state(message);
+        clock_state_signal_out.publish_immediate(clock_fsm.state);
+        ticker.next().await;
     }
 }
 
 #[embassy_executor::task]
 pub async fn clock_controller(
-    mut events_input: EventsMessageSub,
-    clock_state_signal_out: ClockMessagePub,
     mut clock: Clock<'static, RTC>,
-    mut clock_fsm: ClockFSM,
+    time_signal_out: TimeMessagePub,
+    events_input_out: EventsMessagePub,
 ) {
-    let mut ticker = Ticker::every(Duration::from_millis(100));
-
+    let mut ticker = Ticker::every(Duration::from_millis(30));
     loop {
         match select(ticker.next(), clock.wait_alarm()).await {
+            // Timer expired
             Either::First(_) => {
+                //let dt = clock.rtc.now().unwrap();
                 let time = clock.read();
-                let message = events_input.next_message_pure().await;
-                clock_fsm.next_state(message);
-                clock_state_signal_out.publish_immediate((clock_fsm.state, time));
+                //clock.rtc.wait_for_alarm().await;
+                time_signal_out.publish_immediate(time);
+                ticker.next().await;
+                // TODO(elsuizo: 2026-05-12): aca iria la parte de si queremos que sea periodica
+                // See if the alarm is already scheduled, if not, schedule it
+                //if clock.rtc.alarm_scheduled().is_none() {
+                //    info!("Scheduling alarm for 30 seconds from now");
+                //    clock
+                //        .rtc
+                //        .schedule_alarm(DateTimeFilter::default().second((dt.second + 30) % 60));
+                //}
             }
+            // Alarm triggered
             Either::Second(_) => {
-                let time = clock.read();
+                info!("alarma!!!");
                 let message = Msg::AlarmEvent;
-                clock_fsm.next_state(message);
-                clock_state_signal_out.publish_immediate((clock_fsm.state, time));
-                info!("Alarma!!!")
+                events_input_out.publish_immediate(message);
             }
         }
-        //ticker.next().await;
-        //clock.wait_alarm().await;
     }
 }
 
@@ -369,17 +348,20 @@ async fn main(spawner: Spawner) {
     clock.set_alarm(alarm);
 
     spawner.must_spawn(clock_controller(
-        EVENTS_CHANNEL.subscriber().unwrap(),
-        CLOCK_STATE_CHANNEL.publisher().unwrap(),
         clock,
-        fsm,
+        TIME_STATE_CHANNEL.publisher().unwrap(),
+        EVENTS_CHANNEL.publisher().unwrap(),
     ));
     spawner.must_spawn(show_display_states(
         i2c,
         CLOCK_STATE_CHANNEL.subscriber().unwrap(),
-        buzzer,
+        TIME_STATE_CHANNEL.subscriber().unwrap(),
     ));
 
     spawner.must_spawn(keypad2msg(keypad, EVENTS_CHANNEL.publisher().unwrap()));
-    //spawner.must_spawn(alarm_event(EVENTS_CHANNEL.publisher().unwrap(), clock));
+    spawner.must_spawn(clock_state_task(
+        EVENTS_CHANNEL.subscriber().unwrap(),
+        CLOCK_STATE_CHANNEL.publisher().unwrap(),
+        fsm,
+    ));
 }

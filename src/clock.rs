@@ -139,6 +139,6 @@ impl<'r, T: Instance + 'r> Clock<'r, T> {
     }
 
     pub async fn wait_alarm(&mut self) {
-        self.rtc.wait_for_alarm().await
+        self.rtc.wait_for_alarm().await;
     }
 }
