@@ -135,6 +135,7 @@ pub async fn show_display_states(
     i2c: embassy_rp::i2c::I2c<'static, I2C1, embassy_rp::i2c::Blocking>,
     mut clock_state_signal_in: ClockMessageSub,
     mut time_signal_in: TimeMessageSub,
+    mut buzzer: Output<'static>,
 ) {
     let mut ticker = Ticker::every(Duration::from_millis(73));
     let mut display: GraphicsMode<_> = Builder::new().connect_i2c(i2c).into();
@@ -187,7 +188,7 @@ pub async fn show_display_states(
             }
             ClockState::StopAlarm => {}
             ClockState::Alarm => {
-                //alarm_sound_test(&mut buzzer).await;
+                alarm_sound_test(&mut buzzer).await;
                 let _ = Text::new("Alarm!!!\n Press 0\nto disable", Point::new(37, 13), normal)
                     .draw(&mut display);
             }
@@ -356,6 +357,7 @@ async fn main(spawner: Spawner) {
         i2c,
         CLOCK_STATE_CHANNEL.subscriber().unwrap(),
         TIME_STATE_CHANNEL.subscriber().unwrap(),
+        buzzer,
     ));
 
     spawner.must_spawn(keypad2msg(keypad, EVENTS_CHANNEL.publisher().unwrap()));
