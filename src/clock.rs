@@ -1,10 +1,10 @@
 use crate::ui::Msg;
-use crate::EventsMessageSub;
 use crate::String;
 use core::fmt::Write;
 use defmt::info;
 use embassy_rp::rtc::{DateTime, DateTimeFilter, Instance, Rtc, RtcError};
-use serde::{Deserialize, Serialize};
+// TODO(elsuizo: 2026-05-12): esto es para cuando hagamos lo de la conexion UART
+//use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy)]
 pub enum ClockState {
@@ -88,10 +88,10 @@ impl ClockFSM {
     }
 }
 // todo(elsuizo: 2024-08-07): ver como se puede hacer para serialize el `DateTime`
-#[derive(Serialize, Deserialize, Debug, Eq, PartialEq)]
-pub struct ClockFromPc<'a> {
-    time: &'a [u8],
-}
+//#[derive(Serialize, Deserialize, Debug, Eq, PartialEq)]
+//pub struct ClockFromPc<'a> {
+//    time: &'a [u8],
+//}
 
 pub struct Clock<'r, T: Instance> {
     pub rtc: Rtc<'r, T>,

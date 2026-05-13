@@ -2,17 +2,17 @@
 // @date 2024-04-09 14:03
 // @author Martin Noblia
 // TODOs
-// - [x] sacar las dependencias que sobran
-// - [x] conectar y hacer andar el lcd
-// - [ ] hay que hacer un mod que tenga todo lo del clock
-// - [ ] hay que hacer un mod que tenga todo lo del display
-// - [ ] hay que hacer un mod que tenga todo lo de la ui
+// - [X] sacar las dependencias que sobran
+// - [X] conectar y hacer andar el lcd
+// - [X] hay que hacer un mod que tenga todo lo del clock
+// - [X] hay que hacer un mod que tenga todo lo del display
+// - [X] hay que hacer un mod que tenga todo lo de la ui
 // - [ ] hay que sacar la dependencia de keypad y hacerla nosotros con arrays
 // - [ ] hacer un menu para el lcd
 //      - [X] tiene que tener un modo para mostrar la hora
 //          - [X] Hacer una tarea que tenga a los botones que emitan una senial cuando cambian de
 //          estado
-//      - [ ] ver como hacer para activar una alarma o hacerla a mano
+//      - [X] ver como hacer para activar una alarma o hacerla a mano
 //      - [ ] tiene que tener un modo para setear la hora
 //          - [ ] esto tiene que llamar a una task `set-time` o algo asi
 //      - [ ] tiene que tener un modo para setear la alarma
@@ -27,9 +27,8 @@ mod clock;
 use clock::Clock;
 use clock::{ClockFSM, ClockState};
 use core::fmt::Write;
-use embassy_futures::select::{select, select3, Either, Either3};
+use embassy_futures::select::{select, Either};
 use embassy_rp::bind_interrupts;
-use embassy_sync::signal;
 mod ui;
 use defmt::info;
 use embassy_rp::rtc::DayOfWeek;
@@ -84,9 +83,6 @@ keypad_struct! {
     }
 }
 
-/// Signal for notifying about state changes
-static ALARM_TRIGGERED: signal::Signal<CriticalSectionRawMutex, ()> = signal::Signal::new();
-
 type ChannelMutex = CriticalSectionRawMutex;
 
 // Short-hand type alias for PubSubChannel
@@ -130,6 +126,8 @@ pub async fn alarm_sound_test<'a>(buzzer: &'a mut Output<'static>) {
     Timer::after(Duration::from_millis(300)).await;
 }
 
+// TODO(elsuizo: 2026-05-12): capaz que tendriamos que poner aca solo los states que involucran a
+// el lcd
 #[embassy_executor::task]
 pub async fn show_display_states(
     i2c: embassy_rp::i2c::I2c<'static, I2C1, embassy_rp::i2c::Blocking>,
@@ -291,6 +289,9 @@ pub async fn clock_controller(
 
 #[embassy_executor::main]
 async fn main(spawner: Spawner) {
+    //-------------------------------------------------------------------------
+    //                        initialization
+    //-------------------------------------------------------------------------
     info!("init program");
     let p = embassy_rp::init(Default::default());
     let mut led = Output::new(p.PIN_25, Level::Low);
@@ -347,6 +348,9 @@ async fn main(spawner: Spawner) {
     let rtc = Rtc::new(p.RTC, Irqs);
     let mut clock = Clock::new(now, rtc).expect("Error creating the clock type");
     clock.set_alarm(alarm);
+    //-------------------------------------------------------------------------
+    //                        tasks
+    //-------------------------------------------------------------------------
 
     spawner.must_spawn(clock_controller(
         clock,
