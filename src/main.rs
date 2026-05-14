@@ -263,19 +263,17 @@ pub async fn clock_controller(
         match select(ticker.next(), clock.wait_alarm()).await {
             // Timer expired
             Either::First(_) => {
-                //let dt = clock.rtc.now().unwrap();
                 let time = clock.read();
-                //clock.rtc.wait_for_alarm().await;
                 time_signal_out.publish_immediate(time);
-                ticker.next().await;
-                // TODO(elsuizo: 2026-05-12): aca iria la parte de si queremos que sea periodica
-                // See if the alarm is already scheduled, if not, schedule it
-                //if clock.rtc.alarm_scheduled().is_none() {
-                //    info!("Scheduling alarm for 30 seconds from now");
-                //    clock
-                //        .rtc
-                //        .schedule_alarm(DateTimeFilter::default().second((dt.second + 30) % 60));
-                //}
+                // TODO(elsuizo: 2026-05-13): maybe we could choose the period
+                // schedule alarm if the periodic parameter is true
+                if clock.rtc.alarm_scheduled().is_none() && clock.alarm_is_periodic() {
+                    info!("Scheduling alarm for 1 day from now");
+                    let now = clock.rtc.now().expect("error!!!");
+                    clock
+                        .rtc
+                        .schedule_alarm(DateTimeFilter::default().day(now.day + 1));
+                }
             }
             // Alarm triggered
             Either::Second(_) => {
