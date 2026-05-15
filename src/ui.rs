@@ -30,7 +30,7 @@
 //----------------------------------------------------------------------------
 use defmt::Format;
 use embedded_graphics::{
-    mono_font::{ascii::FONT_9X15, MonoTextStyleBuilder},
+    mono_font::{ascii::FONT_10X20, ascii::FONT_9X15, MonoTextStyleBuilder},
     pixelcolor::BinaryColor,
     prelude::*,
     text::Text,
@@ -95,6 +95,41 @@ where
             let _ = Text::new("Test sound", Point::new(10, 13 + 20 + 20), normal).draw(target);
         }
         (_, _, _) => panic!("invalid display state"),
+    }
+    Ok(())
+}
+
+use core::fmt::Write;
+use defmt::info;
+use heapless::String;
+/// show time
+pub fn show_time<D>(target: &mut D, state: (u8, u8, u8)) -> Result<(), D::Error>
+where
+    D: DrawTarget<Color = BinaryColor>,
+{
+    // normal text
+    let normal = MonoTextStyleBuilder::new()
+        .font(&FONT_10X20)
+        .text_color(BinaryColor::On)
+        .build();
+    // text with background
+    // TODO(elsuizo: 2026-05-15): maybe we could highlight the current cursor with this background
+    // trick
+    //let background = MonoTextStyleBuilder::from(&normal)
+    //    .background_color(BinaryColor::On)
+    //    .text_color(BinaryColor::Off)
+    //    .build();
+
+    match state {
+        (h @ 0..=24, m @ 0..60, s @ 0..60) => {
+            let mut out: String<37> = String::new();
+            write!(&mut out, "{}:{}:{}", h, m, s).expect("error writing string");
+            let _ = Text::new(&out, Point::new(3, 13), normal).draw(target);
+        }
+        (_, _, _) => {
+            info!("The numbers exceed the normal clock hours, minutes and seconds",);
+            panic!()
+        }
     }
     Ok(())
 }

@@ -37,7 +37,7 @@ use embassy_rp::rtc::DayOfWeek;
 use embassy_rp::rtc::{DateTime, DateTimeFilter, Rtc};
 use keypad::embedded_hal::digital::v2::InputPin;
 use keypad::{keypad_new, keypad_struct};
-use ui::{show_menu, Msg};
+use ui::{show_menu, show_time, Msg};
 // use defmt::*;
 use embassy_executor::Spawner;
 // use embassy_futures::select::{select, select3, Either};
@@ -177,9 +177,8 @@ pub async fn show_display_states(
                 info!("Sound Test!!!");
                 alarm_sound_test(&mut buzzer).await;
             }
-            ClockState::SetTime => {
-                let _ = Text::new("Settime under\nconstruction!!!", Point::new(3, 13), normal)
-                    .draw(&mut display);
+            ClockState::SetTime(h, m, s) => {
+                show_time(&mut display, (h, m, s)).expect("Error bad state");
             }
             ClockState::SetAlarm(state) => {
                 let mut out: String<37> = String::new();
@@ -213,6 +212,8 @@ pub async fn keypad2msg(keypad: Keypad, button_event: EventsMessagePub) {
                         (0, 0) => button_event.publish_immediate(Msg::One),
                         (0, 1) => button_event.publish_immediate(Msg::Two),
                         (0, 2) => {
+                            // NOTE(elsuizo: 2026-05-15): this is a test for verifying the correct
+                            // connection of the keypad...
                             let msg = Msg::Three;
                             button_event.publish_immediate(msg);
                             info!("message: {}", msg);

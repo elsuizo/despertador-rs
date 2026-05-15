@@ -9,7 +9,7 @@ use embassy_rp::rtc::{DateTime, DateTimeFilter, Instance, Rtc, RtcError};
 #[derive(Debug, Clone, Copy)]
 pub enum ClockState {
     DisplayTime,
-    SetTime,
+    SetTime(u8, u8, u8),
     DisplayAlarm,
     SetAlarm(bool),
     ShowImage,
@@ -35,7 +35,7 @@ impl ClockFSM {
 
         self.state = match (self.state, msg) {
             (DisplayTime, A) => DisplayAlarm,
-            (DisplayTime, C) => SetTime,
+            (DisplayTime, C) => SetTime(0, 0, 0),
             (DisplayTime, Continue) => DisplayTime,
             (DisplayTime, Numeral) => ShowImage,
             (ShowImage, Continue) => ShowImage,
@@ -62,8 +62,9 @@ impl ClockFSM {
             (TestSound, A) => DisplayTime,
             (TestSound, _) => TestSound,
             // SetTime trigger
-            (Menu(true, false, false), Asterisk) => SetTime,
-            (SetTime, Continue) => SetTime,
+            (Menu(true, false, false), Asterisk) => SetTime(0, 0, 0),
+            (SetTime(h, m, s), Continue) => SetTime(h, m, s),
+            (SetTime(h @ 0..=24, m @ 0..60, s @ 0..60), Asterisk) => SetTime(h + 1, m, s),
 
             // SetAlarm trigger
             (Menu(false, true, false), Asterisk) => SetAlarm(true),
