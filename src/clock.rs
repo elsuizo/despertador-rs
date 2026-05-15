@@ -124,6 +124,10 @@ impl<'r, T: Instance + 'r> Clock<'r, T> {
         time
     }
 
+    pub fn alarm_is_enable(&self) -> bool {
+        self.alarm.is_some()
+    }
+
     pub fn set_alarm(&mut self, alarm: DateTimeFilter) {
         self.alarm = Some(alarm);
         self.rtc.schedule_alarm(alarm);
@@ -134,8 +138,13 @@ impl<'r, T: Instance + 'r> Clock<'r, T> {
         self.alarm = None;
     }
 
-    pub fn enable_periodic(&mut self) {
+    // TODO(elsuizo: 2026-05-14): maybe here could add a parameter for the period time
+    pub fn enable_periodic_alarm(&mut self) {
         self.periodic = true
+    }
+
+    pub fn disable_periodic_alarm(&mut self) {
+        self.periodic = false
     }
 
     pub fn alarm_is_periodic(&self) -> bool {

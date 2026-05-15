@@ -13,12 +13,14 @@
 //          - [X] Hacer una tarea que tenga a los botones que emitan una senial cuando cambian de
 //          estado
 //      - [X] ver como hacer para activar una alarma o hacerla a mano
-//      - [ ] tiene que tener un modo para setear la hora
+//      - [X] tiene que tener un modo para setear la hora
+//          - [X] esto tiene que llamar a una task `set-time` o algo asi
+//      - [X] tiene que tener un modo para setear la alarma
 //          - [ ] esto tiene que llamar a una task `set-time` o algo asi
-//      - [ ] tiene que tener un modo para setear la alarma
-//          - [ ] esto tiene que llamar a una task `set-time` o algo asi
-//      - [ ] tiene que tener un modo para alarma
-//              - [ ] la alarma tiene que lanzar algun sonido(podria ser un buzzer para empezar)
+//      - [X] tiene que tener un modo para alarma
+//              - [X] la alarma tiene que lanzar algun sonido(podria ser un buzzer para empezar)
+// - [ ] Cuando entra en el modo set-time el usuario tiene que poder cambiar la hora desde el keypad
+// - [ ] Cuando entra en el modo set-alarm el usuario tiene que poder cambiar la alarma desde el keypad
 //----------------------------------------------------------------------------
 #![no_std]
 #![no_main]
@@ -171,8 +173,9 @@ pub async fn show_display_states(
                 show_menu(&mut display, (a, b, c)).expect("Error bad state");
             }
             ClockState::TestSound => {
-                info!("Sound Test!!!")
-                //alarm_sound_test(&mut buzzer).await;
+                // TODO(elsuizo: 2026-05-14): add a diferent sound for this
+                info!("Sound Test!!!");
+                alarm_sound_test(&mut buzzer).await;
             }
             ClockState::SetTime => {
                 let _ = Text::new("Settime under\nconstruction!!!", Point::new(3, 13), normal)
@@ -260,27 +263,33 @@ pub async fn clock_controller(
 ) {
     let mut ticker = Ticker::every(Duration::from_millis(30));
     loop {
-        match select(ticker.next(), clock.wait_alarm()).await {
-            // Timer expired
-            Either::First(_) => {
-                let time = clock.read();
-                time_signal_out.publish_immediate(time);
-                // TODO(elsuizo: 2026-05-13): maybe we could choose the period
-                // schedule alarm if the periodic parameter is true
-                if clock.rtc.alarm_scheduled().is_none() && clock.alarm_is_periodic() {
-                    info!("Scheduling alarm for 1 day from now");
-                    let now = clock.rtc.now().expect("error!!!");
-                    clock
-                        .rtc
-                        .schedule_alarm(DateTimeFilter::default().day(now.day + 1));
+        if clock.alarm_is_enable() {
+            match select(ticker.next(), clock.wait_alarm()).await {
+                // Timer expired
+                Either::First(_) => {
+                    let time = clock.read();
+                    time_signal_out.publish_immediate(time);
+                    // TODO(elsuizo: 2026-05-13): maybe we could choose the period
+                    // schedule alarm if the periodic parameter is true
+                    if clock.rtc.alarm_scheduled().is_none() && clock.alarm_is_periodic() {
+                        info!("Scheduling alarm for 1 day from now");
+                        let now = clock.rtc.now().expect("error!!!");
+                        clock
+                            .rtc
+                            .schedule_alarm(DateTimeFilter::default().day(now.day + 1));
+                    }
+                }
+                // Alarm triggered
+                Either::Second(_) => {
+                    info!("alarma!!!");
+                    let message = Msg::AlarmEvent;
+                    events_input_out.publish_immediate(message);
                 }
             }
-            // Alarm triggered
-            Either::Second(_) => {
-                info!("alarma!!!");
-                let message = Msg::AlarmEvent;
-                events_input_out.publish_immediate(message);
-            }
+        } else {
+            let time = clock.read();
+            time_signal_out.publish_immediate(time);
+            ticker.next().await;
         }
     }
 }
@@ -346,6 +355,7 @@ async fn main(spawner: Spawner) {
     let rtc = Rtc::new(p.RTC, Irqs);
     let mut clock = Clock::new(now, rtc).expect("Error creating the clock type");
     clock.set_alarm(alarm);
+    clock.enable_periodic_alarm();
     //-------------------------------------------------------------------------
     //                        tasks
     //-------------------------------------------------------------------------
