@@ -2,14 +2,14 @@ use crate::ui::Msg;
 use crate::String;
 use core::fmt::Write;
 use defmt::info;
-use embassy_rp::rtc::{DateTime, DateTimeFilter, Instance, Rtc, RtcError};
+use embassy_rp::rtc::{DateTime, DateTimeFilter, DayOfWeek, Instance, Rtc, RtcError};
 // TODO(elsuizo: 2026-05-12): esto es para cuando hagamos lo de la conexion UART
 //use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub enum ClockState {
     DisplayTime,
-    SetTime(u8, u8, u8),
+    SetTime(DateTime),
     DisplayAlarm,
     SetAlarm(bool),
     ShowImage,
@@ -19,7 +19,7 @@ pub enum ClockState {
     Menu(bool, bool, bool), // menu rows
 }
 
-#[derive(Clone, Debug, Copy)]
+#[derive(Clone, Debug)]
 pub struct ClockFSM {
     pub state: ClockState,
 }
@@ -33,9 +33,9 @@ impl ClockFSM {
         use ClockState::*;
         use Msg::*;
 
-        self.state = match (self.state, msg) {
+        self.state = match (self.state.clone(), msg) {
             (DisplayTime, A) => DisplayAlarm,
-            (DisplayTime, C) => SetTime(0, 0, 0),
+            (DisplayTime, C) => SetTime(dummy_date()),
             (DisplayTime, Continue) => DisplayTime,
             (DisplayTime, Numeral) => ShowImage,
             (ShowImage, Continue) => ShowImage,
@@ -62,9 +62,36 @@ impl ClockFSM {
             (TestSound, A) => DisplayTime,
             (TestSound, _) => TestSound,
             // SetTime trigger
-            (Menu(true, false, false), Asterisk) => SetTime(0, 0, 0),
-            (SetTime(h, m, s), Continue) => SetTime(h, m, s),
-            (SetTime(h @ 0..=24, m @ 0..60, s @ 0..60), Asterisk) => SetTime(h + 1, m, s),
+            (Menu(true, false, false), Asterisk) => SetTime(dummy_date()),
+            (SetTime(date_time), Continue) => SetTime(date_time),
+            // hour + 1
+            (SetTime(ref mut date @ DateTime { hour: h, .. }), A) => {
+                date.hour = if h + 1 < 24 { h + 1 } else { 0 };
+                SetTime(date.clone())
+            }
+            (SetTime(ref mut date @ DateTime { minute: m, .. }), B) => {
+                date.minute = if m + 1 < 60 { m + 1 } else { 0 };
+                SetTime(date.clone())
+            }
+            (SetTime(ref mut date @ DateTime { second: s, .. }), C) => {
+                date.second = if s + 1 < 60 { s + 1 } else { 0 };
+                SetTime(date.clone())
+            }
+            (
+                SetTime(
+                    ref mut date @ DateTime {
+                        day_of_week: day, ..
+                    },
+                ),
+                D,
+            ) => {
+                date.day_of_week = if day as u8 + 1 < 7 {
+                    day_of_week_from_u8(day as u8 + 1)
+                } else {
+                    DayOfWeek::Sunday
+                };
+                SetTime(date.clone())
+            }
 
             // SetAlarm trigger
             (Menu(false, true, false), Asterisk) => SetAlarm(true),
@@ -88,11 +115,37 @@ impl ClockFSM {
         }
     }
 }
+
 // todo(elsuizo: 2024-08-07): ver como se puede hacer para serialize el `DateTime`
 //#[derive(Serialize, Deserialize, Debug, Eq, PartialEq)]
 //pub struct ClockFromPc<'a> {
 //    time: &'a [u8],
 //}
+
+fn day_of_week_from_u8(v: u8) -> DayOfWeek {
+    match v {
+        0 => DayOfWeek::Sunday,
+        1 => DayOfWeek::Monday,
+        2 => DayOfWeek::Tuesday,
+        3 => DayOfWeek::Wednesday,
+        4 => DayOfWeek::Thursday,
+        5 => DayOfWeek::Friday,
+        6 => DayOfWeek::Saturday,
+        _ => panic!("error that day not exists"),
+    }
+}
+// return a dummy date to begin
+pub fn dummy_date() -> DateTime {
+    DateTime {
+        year: 1,
+        month: 1,
+        day: 1,
+        day_of_week: DayOfWeek::Sunday,
+        hour: 0,
+        minute: 0,
+        second: 0,
+    }
+}
 
 pub struct Clock<'r, T: Instance> {
     pub rtc: Rtc<'r, T>,

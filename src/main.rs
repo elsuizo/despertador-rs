@@ -21,6 +21,7 @@
 //              - [X] la alarma tiene que lanzar algun sonido(podria ser un buzzer para empezar)
 // - [ ] Cuando entra en el modo set-time el usuario tiene que poder cambiar la hora desde el keypad
 // - [ ] Cuando entra en el modo set-alarm el usuario tiene que poder cambiar la alarma desde el keypad
+// - [ ] Ver si se puede sacar los clones cuando usamos
 //----------------------------------------------------------------------------
 #![no_std]
 #![no_main]
@@ -37,7 +38,7 @@ use embassy_rp::rtc::DayOfWeek;
 use embassy_rp::rtc::{DateTime, DateTimeFilter, Rtc};
 use keypad::embedded_hal::digital::v2::InputPin;
 use keypad::{keypad_new, keypad_struct};
-use ui::{show_menu, show_time, Msg};
+use ui::{show_menu, Msg};
 // use defmt::*;
 use embassy_executor::Spawner;
 // use embassy_futures::select::{select, select3, Either};
@@ -177,8 +178,16 @@ pub async fn show_display_states(
                 info!("Sound Test!!!");
                 alarm_sound_test(&mut buzzer).await;
             }
-            ClockState::SetTime(h, m, s) => {
-                show_time(&mut display, (h, m, s)).expect("Error bad state");
+            ClockState::SetTime(dt) => {
+                let mut out: String<37> = String::new();
+                // info!("Alarm state: {}", state);
+                write!(
+                    &mut out,
+                    "{:02}:{:02}:{:02}\n{:}-{:}-{:}\n{:?}",
+                    dt.hour, dt.minute, dt.second, dt.day, dt.month, dt.year, dt.day_of_week
+                )
+                .unwrap();
+                let _ = Text::new(&out, Point::new(30, 13), normal).draw(&mut display);
             }
             ClockState::SetAlarm(state) => {
                 let mut out: String<37> = String::new();
@@ -251,7 +260,7 @@ pub async fn clock_state_task(
     loop {
         let message = events_input.next_message_pure().await;
         clock_fsm.next_state(message);
-        clock_state_signal_out.publish_immediate(clock_fsm.state);
+        clock_state_signal_out.publish_immediate(clock_fsm.state.clone());
         ticker.next().await;
     }
 }
