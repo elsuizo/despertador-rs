@@ -1,12 +1,11 @@
 use crate::ui::Msg;
-use crate::String;
-use core::fmt::Write;
 use defmt::info;
 use embassy_rp::rtc::{DateTime, DateTimeFilter, DayOfWeek, Instance, Rtc, RtcError};
 // TODO(elsuizo: 2026-05-12): esto es para cuando hagamos lo de la conexion UART
 //use serde::{Deserialize, Serialize};
 
 use crate::STATE_CHANGED;
+use crate::TIME_CHANNEL;
 #[derive(Debug, Clone)]
 pub enum ClockState {
     DisplayTime,
@@ -30,7 +29,7 @@ impl ClockFSM {
         Self { state }
     }
 
-    pub fn next_state(&mut self, msg: Msg) {
+    pub async fn next_state(&mut self, msg: Msg) {
         use ClockState::*;
         use Msg::*;
 
@@ -68,17 +67,17 @@ impl ClockFSM {
             // hour + 1
             (SetTime(ref mut date @ DateTime { hour: h, .. }), A) => {
                 date.hour = if h + 1 < 24 { h + 1 } else { 0 };
-                STATE_CHANGED.signal(());
+                TIME_CHANNEL.sender().send(date.clone()).await;
                 SetTime(date.clone())
             }
             (SetTime(ref mut date @ DateTime { minute: m, .. }), B) => {
                 date.minute = if m + 1 < 60 { m + 1 } else { 0 };
-                STATE_CHANGED.signal(());
+                TIME_CHANNEL.sender().send(date.clone()).await;
                 SetTime(date.clone())
             }
             (SetTime(ref mut date @ DateTime { second: s, .. }), C) => {
                 date.second = if s + 1 < 60 { s + 1 } else { 0 };
-                STATE_CHANGED.signal(());
+                TIME_CHANNEL.sender().send(date.clone()).await;
                 SetTime(date.clone())
             }
             (
@@ -94,7 +93,7 @@ impl ClockFSM {
                 } else {
                     DayOfWeek::Sunday
                 };
-                STATE_CHANGED.signal(());
+                TIME_CHANNEL.sender().send(date.clone()).await;
                 SetTime(date.clone())
             }
 
@@ -168,19 +167,8 @@ impl<'r, T: Instance + 'r> Clock<'r, T> {
         })
     }
 
-    pub fn read(&self) -> String<37> {
-        let mut time: String<37> = String::new();
-        if let Ok(dt) = self.rtc.now() {
-            write!(
-                &mut time,
-                "{:02}:{:02}:{:02}\n{:}-{:}-{:}\n{:?}",
-                dt.hour, dt.minute, dt.second, dt.day, dt.month, dt.year, dt.day_of_week
-            )
-            .unwrap();
-        } else {
-            info!("The RTC is not working ...")
-        }
-        time
+    pub fn read(&self) -> DateTime {
+        self.rtc.now().expect("Error reading the clock state")
     }
 
     pub fn alarm_is_enable(&self) -> bool {

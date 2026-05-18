@@ -108,11 +108,14 @@ pub type ClockMessageSub = Sub<ClockMessageType, CLOCK_CHANNEL_NUM>;
 pub static CLOCK_STATE_CHANNEL: Ch<ClockMessageType, CLOCK_CHANNEL_NUM> = PubSubChannel::new();
 
 const TIME_CHANNEL_CAP: usize = 2;
-pub type TimeMessageType = String<37>;
+pub type TimeMessageType = DateTime;
 pub type TimeMessagePub = Pub<TimeMessageType, TIME_CHANNEL_CAP>;
 pub type TimeMessageSub = Sub<TimeMessageType, TIME_CHANNEL_CAP>;
 pub static TIME_STATE_CHANNEL: Ch<TimeMessageType, TIME_CHANNEL_CAP> = PubSubChannel::new();
 
+/// Channel for time sharing
+static TIME_CHANNEL: channel::Channel<CriticalSectionRawMutex, DateTime, 10> =
+    channel::Channel::new();
 use embassy_sync::{channel, signal};
 /// Signal for notifying about state changes
 static STATE_CHANGED: signal::Signal<CriticalSectionRawMutex, ()> = signal::Signal::new();
@@ -164,7 +167,20 @@ pub async fn show_display_states(
         match clock_state_signal_in.next_message_pure().await {
             ClockState::DisplayTime => {
                 let time = time_signal_in.next_message_pure().await;
-                let _ = Text::new(&time, Point::new(30, 13), normal).draw(&mut display);
+                let mut out: String<37> = String::new();
+                write!(
+                    &mut out,
+                    "{:02}:{:02}:{:02}\n{:}-{:}-{:}\n{:?}",
+                    time.hour,
+                    time.minute,
+                    time.second,
+                    time.day,
+                    time.month,
+                    time.year,
+                    time.day_of_week
+                )
+                .unwrap();
+                let _ = Text::new(&out, Point::new(30, 13), normal).draw(&mut display);
             }
             ClockState::ShowImage => {
                 let _ = Image::new(&logo_image, Point::new(32, 0)).draw(&mut display);
@@ -213,10 +229,13 @@ pub async fn show_display_states(
 }
 
 #[embassy_executor::task]
-async fn update_datetime(_spawner: Spawner, time_signal_out: TimeMessagePub) {
+async fn update_datetime(time_signal_out: TimeMessagePub) {
+    let receiver = TIME_CHANNEL.receiver();
     loop {
-        // Wait for state change notification
-        STATE_CHANGED.wait().await;
+        // Do nothing until we receive any event
+        let datetime = receiver.receive().await;
+        info!("Recibimos datos");
+        time_signal_out.publish_immediate(datetime);
     }
 }
 
@@ -271,7 +290,7 @@ pub async fn clock_state_task(
     let mut ticker = Ticker::every(Duration::from_millis(30));
     loop {
         let message = events_input.next_message_pure().await;
-        clock_fsm.next_state(message);
+        clock_fsm.next_state(message).await;
         clock_state_signal_out.publish_immediate(clock_fsm.state.clone());
         ticker.next().await;
     }
@@ -376,7 +395,7 @@ async fn main(spawner: Spawner) {
 
     let rtc = Rtc::new(p.RTC, Irqs);
     let mut clock = Clock::new(now, rtc).expect("Error creating the clock type");
-    clock.set_alarm(alarm);
+    //clock.set_alarm(alarm);
     clock.enable_periodic_alarm();
     //-------------------------------------------------------------------------
     //                        tasks
@@ -395,6 +414,7 @@ async fn main(spawner: Spawner) {
     ));
 
     spawner.must_spawn(keypad2msg(keypad, EVENTS_CHANNEL.publisher().unwrap()));
+    spawner.must_spawn(update_datetime(TIME_STATE_CHANNEL.publisher().unwrap()));
     spawner.must_spawn(clock_state_task(
         EVENTS_CHANNEL.subscriber().unwrap(),
         CLOCK_STATE_CHANNEL.publisher().unwrap(),
