@@ -6,6 +6,7 @@ use embassy_rp::rtc::{DateTime, DateTimeFilter, DayOfWeek, Instance, Rtc, RtcErr
 // TODO(elsuizo: 2026-05-12): esto es para cuando hagamos lo de la conexion UART
 //use serde::{Deserialize, Serialize};
 
+use crate::STATE_CHANGED;
 #[derive(Debug, Clone)]
 pub enum ClockState {
     DisplayTime,
@@ -67,14 +68,17 @@ impl ClockFSM {
             // hour + 1
             (SetTime(ref mut date @ DateTime { hour: h, .. }), A) => {
                 date.hour = if h + 1 < 24 { h + 1 } else { 0 };
+                STATE_CHANGED.signal(());
                 SetTime(date.clone())
             }
             (SetTime(ref mut date @ DateTime { minute: m, .. }), B) => {
                 date.minute = if m + 1 < 60 { m + 1 } else { 0 };
+                STATE_CHANGED.signal(());
                 SetTime(date.clone())
             }
             (SetTime(ref mut date @ DateTime { second: s, .. }), C) => {
                 date.second = if s + 1 < 60 { s + 1 } else { 0 };
+                STATE_CHANGED.signal(());
                 SetTime(date.clone())
             }
             (
@@ -90,6 +94,7 @@ impl ClockFSM {
                 } else {
                     DayOfWeek::Sunday
                 };
+                STATE_CHANGED.signal(());
                 SetTime(date.clone())
             }
 

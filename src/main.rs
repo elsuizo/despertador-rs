@@ -113,6 +113,10 @@ pub type TimeMessagePub = Pub<TimeMessageType, TIME_CHANNEL_CAP>;
 pub type TimeMessageSub = Sub<TimeMessageType, TIME_CHANNEL_CAP>;
 pub static TIME_STATE_CHANNEL: Ch<TimeMessageType, TIME_CHANNEL_CAP> = PubSubChannel::new();
 
+use embassy_sync::{channel, signal};
+/// Signal for notifying about state changes
+static STATE_CHANGED: signal::Signal<CriticalSectionRawMutex, ()> = signal::Signal::new();
+
 pub async fn alarm_sound_test<'a>(buzzer: &'a mut Output<'static>) {
     // TODO(elsuizo: 2024-08-17): hacer que esto sea un sonido real de alarma
     // quizas tambien tendriamos que hacer que sea infinita hasta que pase un evento
@@ -205,6 +209,14 @@ pub async fn show_display_states(
         display.flush().ok();
         display.clear();
         ticker.next().await;
+    }
+}
+
+#[embassy_executor::task]
+async fn update_datetime(_spawner: Spawner, time_signal_out: TimeMessagePub) {
+    loop {
+        // Wait for state change notification
+        STATE_CHANGED.wait().await;
     }
 }
 
