@@ -30,7 +30,8 @@ mod clock;
 use clock::Clock;
 use clock::{ClockFSM, ClockState};
 use core::fmt::Write;
-use embassy_futures::select::{select, Either};
+//use embassy_futures::select::{select, Either};
+use embassy_futures::select::{select3, Either3};
 use embassy_rp::bind_interrupts;
 mod ui;
 use defmt::info;
@@ -228,16 +229,16 @@ pub async fn show_display_states(
     }
 }
 
-#[embassy_executor::task]
-async fn update_datetime(time_signal_out: TimeMessagePub) {
-    let receiver = TIME_CHANNEL.receiver();
-    loop {
-        // Do nothing until we receive any event
-        let datetime = receiver.receive().await;
-        info!("Recibimos datos");
-        time_signal_out.publish_immediate(datetime);
-    }
-}
+//#[embassy_executor::task]
+//async fn update_datetime(time_signal_out: TimeMessagePub) {
+//    let receiver = TIME_CHANNEL.receiver();
+//    loop {
+//        // Do nothing until we receive any event
+//        let datetime = receiver.receive().await;
+//        info!("Recibimos datos");
+//        time_signal_out.publish_immediate(datetime);
+//    }
+//}
 
 #[embassy_executor::task]
 pub async fn keypad2msg(keypad: Keypad, button_event: EventsMessagePub) {
@@ -303,11 +304,12 @@ pub async fn clock_controller(
     events_input_out: EventsMessagePub,
 ) {
     let mut ticker = Ticker::every(Duration::from_millis(30));
+    let receiver = TIME_CHANNEL.receiver();
     loop {
         if clock.alarm_is_enable() {
-            match select(ticker.next(), clock.wait_alarm()).await {
+            match select3(ticker.next(), clock.wait_alarm(), receiver.receive()).await {
                 // Timer expired
-                Either::First(_) => {
+                Either3::First(_) => {
                     let time = clock.read();
                     time_signal_out.publish_immediate(time);
                     // TODO(elsuizo: 2026-05-13): maybe we could choose the period
@@ -321,10 +323,18 @@ pub async fn clock_controller(
                     }
                 }
                 // Alarm triggered
-                Either::Second(_) => {
+                Either3::Second(_) => {
                     info!("alarma!!!");
                     let message = Msg::AlarmEvent;
                     events_input_out.publish_immediate(message);
+                }
+                Either3::Third(date) => {
+                    info!("Setting the new date");
+                    clock
+                        .rtc
+                        .set_datetime(date.clone())
+                        .expect("Error setting the new date");
+                    time_signal_out.publish_immediate(date.clone());
                 }
             }
         } else {
@@ -414,7 +424,7 @@ async fn main(spawner: Spawner) {
     ));
 
     spawner.must_spawn(keypad2msg(keypad, EVENTS_CHANNEL.publisher().unwrap()));
-    spawner.must_spawn(update_datetime(TIME_STATE_CHANNEL.publisher().unwrap()));
+    //spawner.must_spawn(update_datetime(TIME_STATE_CHANNEL.publisher().unwrap()));
     spawner.must_spawn(clock_state_task(
         EVENTS_CHANNEL.subscriber().unwrap(),
         CLOCK_STATE_CHANNEL.publisher().unwrap(),
