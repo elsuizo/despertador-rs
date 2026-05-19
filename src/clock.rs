@@ -1,6 +1,7 @@
 use crate::ui::Msg;
 use defmt::info;
 use embassy_rp::rtc::{DateTime, DateTimeFilter, DayOfWeek, Instance, Rtc, RtcError};
+use heapless::index_map;
 // TODO(elsuizo: 2026-05-12): esto es para cuando hagamos lo de la conexion UART
 //use serde::{Deserialize, Serialize};
 
@@ -8,7 +9,7 @@ use crate::STATE_CHANGED;
 use crate::TIME_CHANNEL;
 #[derive(Debug, Clone)]
 pub enum ClockState {
-    DisplayTime,
+    DisplayTime(DateTime),
     SetTime(DateTime),
     DisplayAlarm,
     SetAlarm(bool),
@@ -22,26 +23,29 @@ pub enum ClockState {
 #[derive(Clone, Debug)]
 pub struct ClockFSM {
     pub state: ClockState,
+    pub now: DateTime,
 }
 
 impl ClockFSM {
-    pub fn init(state: ClockState) -> Self {
-        Self { state }
+    pub fn init(state: ClockState, now: DateTime) -> Self {
+        Self { state, now }
     }
 
-    pub async fn next_state(&mut self, msg: Msg) {
+    pub fn next_state(&mut self, msg: Msg) {
         use ClockState::*;
         use Msg::*;
 
         self.state = match (self.state.clone(), msg) {
-            (DisplayTime, A) => DisplayAlarm,
-            (DisplayTime, C) => SetTime(dummy_date()),
-            (DisplayTime, Continue) => DisplayTime,
-            (DisplayTime, Numeral) => ShowImage,
+            (StopAlarm, _) => DisplayTime(self.now.clone()),
+            (DisplayTime(_), A) => DisplayAlarm,
+            (DisplayTime(date), C) => SetTime(date),
+            (DisplayTime(date), Continue) => DisplayTime(date),
+            (DisplayTime(_), Numeral) => ShowImage,
             (ShowImage, Continue) => ShowImage,
-            (DisplayTime, B) => Menu(false, false, false),
-            (DisplayTime, AlarmEvent) => Alarm,
-            (DisplayTime, _) => DisplayTime, // any other keys
+            (ShowImage, _) => DisplayTime(self.now.clone()),
+            (DisplayTime(_), B) => Menu(false, false, false),
+            (DisplayTime(_), AlarmEvent) => Alarm,
+            (DisplayTime(date), _) => DisplayTime(date), // any other keys
             // up
             (Menu(true, false, false), A) => Menu(false, false, true),
             (Menu(true, false, false), Continue) => Menu(true, false, false),
@@ -59,25 +63,22 @@ impl ClockFSM {
             // TestSound trigger
             (Menu(false, false, true), Asterisk) => TestSound,
             (TestSound, Continue) => TestSound,
-            (TestSound, A) => DisplayTime,
+            (TestSound, A) => DisplayTime(self.now.clone()),
             (TestSound, _) => TestSound,
             // SetTime trigger
-            (Menu(true, false, false), Asterisk) => SetTime(dummy_date()),
+            (Menu(true, false, false), Asterisk) => SetTime(self.now.clone()),
             (SetTime(date_time), Continue) => SetTime(date_time),
             // hour + 1
             (SetTime(ref mut date @ DateTime { hour: h, .. }), A) => {
                 date.hour = if h + 1 < 24 { h + 1 } else { 0 };
-                TIME_CHANNEL.sender().send(date.clone()).await;
                 SetTime(date.clone())
             }
             (SetTime(ref mut date @ DateTime { minute: m, .. }), B) => {
                 date.minute = if m + 1 < 60 { m + 1 } else { 0 };
-                TIME_CHANNEL.sender().send(date.clone()).await;
                 SetTime(date.clone())
             }
             (SetTime(ref mut date @ DateTime { second: s, .. }), C) => {
                 date.second = if s + 1 < 60 { s + 1 } else { 0 };
-                TIME_CHANNEL.sender().send(date.clone()).await;
                 SetTime(date.clone())
             }
             (
@@ -93,9 +94,9 @@ impl ClockFSM {
                 } else {
                     DayOfWeek::Sunday
                 };
-                TIME_CHANNEL.sender().send(date.clone()).await;
                 SetTime(date.clone())
             }
+            (SetTime(date), Zero) => DisplayTime(date),
 
             // SetAlarm trigger
             (Menu(false, true, false), Asterisk) => SetAlarm(true),
@@ -104,18 +105,20 @@ impl ClockFSM {
             (SetAlarm(true), Asterisk) => SetAlarm(false),
             // enable alarm again
             (SetAlarm(false), Asterisk) => SetAlarm(true),
+            (SetAlarm(_), _) => DisplayTime(self.now.clone()),
 
             (Menu(false, false, false), Continue) => Menu(false, false, false),
             (Menu(false, false, false), A) => Menu(true, false, false),
             (Menu(false, false, false), D) => Menu(false, false, true),
             // (StopAlarm, _) => DisplayTime,
             (DisplayAlarm, Continue) => DisplayAlarm,
+            (DisplayAlarm, _) => DisplayTime(self.now.clone()),
             (Alarm, Continue) => Alarm,
             (Alarm, Zero) => {
                 info!("Alarm stopped");
                 StopAlarm
             }
-            (_, _) => DisplayTime,
+            (_, _) => DisplayTime(self.now.clone()),
         }
     }
 }
