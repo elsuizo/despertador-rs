@@ -4,9 +4,8 @@ use embassy_rp::rtc::{DateTime, DateTimeFilter, DayOfWeek, Instance, Rtc, RtcErr
 use heapless::index_map;
 // TODO(elsuizo: 2026-05-12): esto es para cuando hagamos lo de la conexion UART
 //use serde::{Deserialize, Serialize};
-
-use crate::STATE_CHANGED;
 use crate::TIME_CHANNEL;
+
 #[derive(Debug, Clone)]
 pub enum ClockState {
     DisplayTime(DateTime),
@@ -31,7 +30,7 @@ impl ClockFSM {
         Self { state, now }
     }
 
-    pub fn next_state(&mut self, msg: Msg) {
+    pub async fn next_state(&mut self, msg: Msg) {
         use ClockState::*;
         use Msg::*;
 
@@ -96,7 +95,11 @@ impl ClockFSM {
                 };
                 SetTime(date.clone())
             }
-            (SetTime(date), Zero) => DisplayTime(date),
+            // TODO(elsuizo: 2026-05-20): clones everywere!!!
+            (SetTime(date), Zero) => {
+                TIME_CHANNEL.sender().send(date.clone()).await;
+                DisplayTime(date.clone())
+            }
 
             // SetAlarm trigger
             (Menu(false, true, false), Asterisk) => SetAlarm(true),
@@ -105,7 +108,6 @@ impl ClockFSM {
             (SetAlarm(true), Asterisk) => SetAlarm(false),
             // enable alarm again
             (SetAlarm(false), Asterisk) => SetAlarm(true),
-            (SetAlarm(_), _) => DisplayTime(self.now.clone()),
 
             (Menu(false, false, false), Continue) => Menu(false, false, false),
             (Menu(false, false, false), A) => Menu(true, false, false),
@@ -139,18 +141,6 @@ fn day_of_week_from_u8(v: u8) -> DayOfWeek {
         5 => DayOfWeek::Friday,
         6 => DayOfWeek::Saturday,
         _ => panic!("error that day not exists"),
-    }
-}
-// return a dummy date to begin
-pub fn dummy_date() -> DateTime {
-    DateTime {
-        year: 1,
-        month: 1,
-        day: 1,
-        day_of_week: DayOfWeek::Sunday,
-        hour: 0,
-        minute: 0,
-        second: 0,
     }
 }
 

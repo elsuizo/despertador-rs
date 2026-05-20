@@ -30,8 +30,8 @@ mod clock;
 use clock::Clock;
 use clock::{ClockFSM, ClockState};
 use core::fmt::Write;
-use embassy_futures::select::{select, Either};
-//use embassy_futures::select::{select3, Either3};
+//use embassy_futures::select::{select, Either};
+use embassy_futures::select::{select3, Either3};
 use embassy_rp::bind_interrupts;
 mod ui;
 use defmt::info;
@@ -114,12 +114,11 @@ pub type TimeMessagePub = Pub<TimeMessageType, TIME_CHANNEL_CAP>;
 pub type TimeMessageSub = Sub<TimeMessageType, TIME_CHANNEL_CAP>;
 pub static TIME_STATE_CHANNEL: Ch<TimeMessageType, TIME_CHANNEL_CAP> = PubSubChannel::new();
 
+use embassy_sync::channel;
+
 /// Channel for time sharing
 static TIME_CHANNEL: channel::Channel<CriticalSectionRawMutex, DateTime, 10> =
     channel::Channel::new();
-use embassy_sync::{channel, signal};
-/// Signal for notifying about state changes
-static STATE_CHANGED: signal::Signal<CriticalSectionRawMutex, ()> = signal::Signal::new();
 
 pub async fn alarm_sound_test<'a>(buzzer: &'a mut Output<'static>) {
     // TODO(elsuizo: 2024-08-17): hacer que esto sea un sonido real de alarma
@@ -289,13 +288,13 @@ pub async fn clock_state_task(
     mut clock_fsm: ClockFSM,
     mut time_signal_in: TimeMessageSub,
 ) {
-    let mut ticker = Ticker::every(Duration::from_millis(30));
+    let mut ticker = Ticker::every(Duration::from_millis(50));
     loop {
-        let message = events_input.next_message_pure().await;
-        clock_fsm.next_state(message);
-        clock_state_signal_out.publish_immediate(clock_fsm.state.clone());
         let time = time_signal_in.next_message_pure().await;
+        let message = events_input.next_message_pure().await;
         clock_fsm.now = time;
+        clock_fsm.next_state(message).await;
+        clock_state_signal_out.publish_immediate(clock_fsm.state.clone());
         ticker.next().await;
     }
 }
@@ -306,13 +305,13 @@ pub async fn clock_controller(
     time_signal_out: TimeMessagePub,
     events_input_out: EventsMessagePub,
 ) {
-    let mut ticker = Ticker::every(Duration::from_millis(30));
+    let mut ticker = Ticker::every(Duration::from_millis(10));
     let receiver = TIME_CHANNEL.receiver();
     loop {
         if clock.alarm_is_enable() {
-            match select(ticker.next(), clock.wait_alarm()).await {
+            match select3(ticker.next(), clock.wait_alarm(), receiver.receive()).await {
                 // Timer expired
-                Either::First(_) => {
+                Either3::First(_) => {
                     let time = clock.read();
                     time_signal_out.publish_immediate(time);
                     // TODO(elsuizo: 2026-05-13): maybe we could choose the period
@@ -326,10 +325,13 @@ pub async fn clock_controller(
                     }
                 }
                 // Alarm triggered
-                Either::Second(_) => {
+                Either3::Second(_) => {
                     info!("alarma!!!");
                     let message = Msg::AlarmEvent;
                     events_input_out.publish_immediate(message);
+                }
+                Either3::Third(date) => {
+                    clock.rtc.set_datetime(date);
                 }
             }
         } else {
@@ -400,7 +402,7 @@ async fn main(spawner: Spawner) {
 
     let rtc = Rtc::new(p.RTC, Irqs);
     let mut clock = Clock::new(now, rtc).expect("Error creating the clock type");
-    //clock.set_alarm(alarm);
+    clock.set_alarm(alarm);
     clock.enable_periodic_alarm();
     //-------------------------------------------------------------------------
     //                        tasks
@@ -419,7 +421,6 @@ async fn main(spawner: Spawner) {
     ));
 
     spawner.must_spawn(keypad2msg(keypad, EVENTS_CHANNEL.publisher().unwrap()));
-    //spawner.must_spawn(update_datetime(TIME_STATE_CHANNEL.publisher().unwrap()));
     spawner.must_spawn(clock_state_task(
         EVENTS_CHANNEL.subscriber().unwrap(),
         CLOCK_STATE_CHANNEL.publisher().unwrap(),
