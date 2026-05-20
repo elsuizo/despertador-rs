@@ -306,6 +306,7 @@ pub async fn clock_controller(
     events_input_out: EventsMessagePub,
 ) {
     let mut ticker = Ticker::every(Duration::from_millis(10));
+    // receiver when time was changed
     let receiver = TIME_CHANNEL.receiver();
     loop {
         if clock.alarm_is_enable() {
@@ -330,8 +331,12 @@ pub async fn clock_controller(
                     let message = Msg::AlarmEvent;
                     events_input_out.publish_immediate(message);
                 }
+                // setting new time comming from ui
                 Either3::Third(date) => {
-                    clock.rtc.set_datetime(date);
+                    clock
+                        .rtc
+                        .set_datetime(date)
+                        .expect("Error setting the new datetime");
                 }
             }
         } else {

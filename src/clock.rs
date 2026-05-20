@@ -1,7 +1,6 @@
 use crate::ui::Msg;
 use defmt::info;
 use embassy_rp::rtc::{DateTime, DateTimeFilter, DayOfWeek, Instance, Rtc, RtcError};
-use heapless::index_map;
 // TODO(elsuizo: 2026-05-12): esto es para cuando hagamos lo de la conexion UART
 //use serde::{Deserialize, Serialize};
 use crate::TIME_CHANNEL;
@@ -67,6 +66,18 @@ impl ClockFSM {
             // SetTime trigger
             (Menu(true, false, false), Asterisk) => SetTime(self.now.clone()),
             (SetTime(date_time), Continue) => SetTime(date_time),
+            (SetTime(ref mut date @ DateTime { year: y, .. }), Numeral) => {
+                date.year = if y + 1 < 4095 { y + 1 } else { 0 };
+                SetTime(date.clone())
+            }
+            (SetTime(ref mut date @ DateTime { month: m, .. }), One) => {
+                date.month = if m + 1 < 13 { m + 1 } else { 0 };
+                SetTime(date.clone())
+            }
+            (SetTime(ref mut date @ DateTime { day: d, .. }), Two) => {
+                date.day = if d + 1 < 32 { d + 1 } else { 0 };
+                SetTime(date.clone())
+            }
             // hour + 1
             (SetTime(ref mut date @ DateTime { hour: h, .. }), A) => {
                 date.hour = if h + 1 < 24 { h + 1 } else { 0 };
