@@ -8,7 +8,7 @@
 // - [X] hay que hacer un mod que tenga todo lo del display
 // - [X] hay que hacer un mod que tenga todo lo de la ui
 // - [ ] hay que sacar la dependencia de keypad y hacerla nosotros con arrays
-// - [ ] hacer un menu para el lcd
+// - [X] hacer un menu para el lcd
 //      - [X] tiene que tener un modo para mostrar la hora
 //          - [X] Hacer una tarea que tenga a los botones que emitan una senial cuando cambian de
 //          estado
@@ -19,7 +19,7 @@
 //          - [ ] esto tiene que llamar a una task `set-time` o algo asi
 //      - [X] tiene que tener un modo para alarma
 //              - [X] la alarma tiene que lanzar algun sonido(podria ser un buzzer para empezar)
-// - [ ] Cuando entra en el modo set-time el usuario tiene que poder cambiar la hora desde el keypad
+// - [X] Cuando entra en el modo set-time el usuario tiene que poder cambiar la hora desde el keypad
 // - [ ] Cuando entra en el modo set-alarm el usuario tiene que poder cambiar la alarma desde el keypad
 // - [ ] Ver si se puede sacar los clones cuando usamos
 //----------------------------------------------------------------------------
@@ -30,9 +30,10 @@ mod clock;
 use clock::Clock;
 use clock::{ClockFSM, ClockState};
 use core::fmt::Write;
-//use embassy_futures::select::{select, Either};
+use embassy_futures::select::{select, Either};
 use embassy_futures::select::{select3, Either3};
 use embassy_rp::bind_interrupts;
+use embassy_sync::{channel, signal};
 mod ui;
 use defmt::info;
 use embassy_rp::rtc::DayOfWeek;
@@ -65,7 +66,6 @@ use embedded_graphics::{
     text::Text,
 };
 
-// Bind the RTC interrupt to the handler
 bind_interrupts!(struct Irqs {
     RTC_IRQ => embassy_rp::rtc::InterruptHandler;
 });
@@ -87,6 +87,9 @@ keypad_struct! {
     }
 }
 
+//-------------------------------------------------------------------------
+//                        types alias definition
+//-------------------------------------------------------------------------
 type ChannelMutex = CriticalSectionRawMutex;
 
 // Short-hand type alias for PubSubChannel
@@ -114,8 +117,7 @@ pub type TimeMessagePub = Pub<TimeMessageType, TIME_CHANNEL_CAP>;
 pub type TimeMessageSub = Sub<TimeMessageType, TIME_CHANNEL_CAP>;
 pub static TIME_STATE_CHANNEL: Ch<TimeMessageType, TIME_CHANNEL_CAP> = PubSubChannel::new();
 
-use embassy_sync::channel;
-
+static ALARM_ENABLED: signal::Signal<CriticalSectionRawMutex, ()> = signal::Signal::new();
 /// Channel for time sharing
 static TIME_CHANNEL: channel::Channel<CriticalSectionRawMutex, DateTime, 10> =
     channel::Channel::new();
@@ -165,6 +167,7 @@ pub async fn show_display_states(
     // TODO(elsuizo: 2024-08-13): this menus items should be a function...
     loop {
         match clock_state_signal_in.next_message_pure().await {
+            // TODO(elsuizo: 2026-05-21): this should use the `datetime` inside `DisplayTime`
             ClockState::DisplayTime(date) => {
                 let time = time_signal_in.next_message_pure().await;
                 let mut out: String<37> = String::new();
@@ -199,15 +202,15 @@ pub async fn show_display_states(
                 alarm_sound_test(&mut buzzer).await;
             }
             ClockState::SetTime(dt) => {
-                let mut out: String<37> = String::new();
+                let mut out: String<45> = String::new();
                 // info!("Alarm state: {}", state);
                 write!(
                     &mut out,
-                    "{:02}:{:02}:{:02}\n{:}-{:}-{:}\n{:?}",
+                    "Setting time\n{:02}:{:02}:{:02}\n{:}-{:}-{:}\n{:?}",
                     dt.hour, dt.minute, dt.second, dt.day, dt.month, dt.year, dt.day_of_week
                 )
-                .unwrap();
-                let _ = Text::new(&out, Point::new(30, 13), normal).draw(&mut display);
+                .expect("error writing the String type");
+                let _ = Text::new(&out, Point::new(20, 13), normal).draw(&mut display);
             }
             ClockState::SetAlarm(state) => {
                 let mut out: String<37> = String::new();
@@ -305,11 +308,11 @@ pub async fn clock_controller(
     time_signal_out: TimeMessagePub,
     events_input_out: EventsMessagePub,
 ) {
-    let mut ticker = Ticker::every(Duration::from_millis(10));
+    let mut ticker = Ticker::every(Duration::from_millis(30));
     // receiver when time was changed
     let receiver = TIME_CHANNEL.receiver();
     loop {
-        if clock.alarm_is_enable() {
+        if clock.alarm_is_enabled() {
             match select3(ticker.next(), clock.wait_alarm(), receiver.receive()).await {
                 // Timer expired
                 Either3::First(_) => {
@@ -340,9 +343,18 @@ pub async fn clock_controller(
                 }
             }
         } else {
-            let time = clock.read();
-            time_signal_out.publish_immediate(time);
-            ticker.next().await;
+            match select(ticker.next(), receiver.receive()).await {
+                Either::First(_) => {
+                    let time = clock.read();
+                    time_signal_out.publish_immediate(time);
+                }
+                Either::Second(date) => {
+                    clock
+                        .rtc
+                        .set_datetime(date)
+                        .expect("Error setting the new datetime");
+                }
+            }
         }
     }
 }
@@ -384,12 +396,12 @@ async fn main(spawner: Spawner) {
     //-------------------------------------------------------------------------
     info!("Start RTC");
     let now = DateTime {
-        year: 2025,
-        month: 6,
-        day: 29,
-        day_of_week: DayOfWeek::Sunday,
-        hour: 13,
-        minute: 51,
+        year: 2026,
+        month: 5,
+        day: 20,
+        day_of_week: DayOfWeek::Thursday,
+        hour: 8,
+        minute: 3,
         second: 0,
     };
 
@@ -408,7 +420,7 @@ async fn main(spawner: Spawner) {
     let rtc = Rtc::new(p.RTC, Irqs);
     let mut clock = Clock::new(now, rtc).expect("Error creating the clock type");
     clock.set_alarm(alarm);
-    clock.enable_periodic_alarm();
+    //clock.enable_periodic_alarm();
     //-------------------------------------------------------------------------
     //                        tasks
     //-------------------------------------------------------------------------

@@ -1,4 +1,4 @@
-use crate::ui::Msg;
+use crate::{ui::Msg, ALARM_ENABLED};
 use defmt::info;
 use embassy_rp::rtc::{DateTime, DateTimeFilter, DayOfWeek, Instance, Rtc, RtcError};
 // TODO(elsuizo: 2026-05-12): esto es para cuando hagamos lo de la conexion UART
@@ -175,10 +175,6 @@ impl<'r, T: Instance + 'r> Clock<'r, T> {
         self.rtc.now().expect("Error reading the clock state")
     }
 
-    pub fn alarm_is_enable(&self) -> bool {
-        self.alarm.is_some()
-    }
-
     pub fn set_alarm(&mut self, alarm: DateTimeFilter) {
         self.alarm = Some(alarm);
         self.rtc.schedule_alarm(alarm);
@@ -187,6 +183,10 @@ impl<'r, T: Instance + 'r> Clock<'r, T> {
     pub fn disable_alarm(&mut self) {
         self.rtc.disable_alarm();
         self.alarm = None;
+    }
+
+    pub fn alarm_is_enabled(&self) -> bool {
+        self.alarm.is_some()
     }
 
     // TODO(elsuizo: 2026-05-14): maybe here could add a parameter for the period time
