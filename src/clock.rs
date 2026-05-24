@@ -1,14 +1,16 @@
-use crate::{ui::Msg, ALARM_ENABLED};
+use crate::ui::Msg;
 use defmt::info;
 use embassy_rp::rtc::{DateTime, DateTimeFilter, DayOfWeek, Instance, Rtc, RtcError};
 // TODO(elsuizo: 2026-05-12): esto es para cuando hagamos lo de la conexion UART
 //use serde::{Deserialize, Serialize};
+use crate::ALARM_CHANNEL;
 use crate::TIME_CHANNEL;
 
 #[derive(Debug, Clone)]
 pub enum ClockState {
     DisplayTime(DateTime),
     SetTime(DateTime),
+    SetAlarmTime(DateTimeFilter),
     DisplayAlarm,
     SetAlarm(bool),
     ShowImage,
@@ -110,6 +112,67 @@ impl ClockFSM {
             (SetTime(date), Zero) => {
                 TIME_CHANNEL.sender().send(date.clone()).await;
                 DisplayTime(date.clone())
+            }
+            (SetAlarmTime(date_time), Continue) => SetAlarmTime(date_time),
+            (SetAlarmTime(ref mut date @ DateTimeFilter { year: Some(y), .. }), Numeral) => {
+                date.year = Some(if y + 1 < 4095 { y + 1 } else { 0 });
+                SetAlarmTime(date.clone())
+            }
+            (SetAlarmTime(ref mut date @ DateTimeFilter { month: Some(m), .. }), One) => {
+                date.month = Some(if m + 1 < 13 { m + 1 } else { 0 });
+                SetAlarmTime(date.clone())
+            }
+            (SetAlarmTime(ref mut date @ DateTimeFilter { day: Some(d), .. }), Two) => {
+                date.day = Some(if d + 1 < 32 { d + 1 } else { 0 });
+                SetAlarmTime(date.clone())
+            }
+            // hour + 1
+            (SetAlarmTime(ref mut date @ DateTimeFilter { hour: Some(h), .. }), A) => {
+                date.hour = Some(if h + 1 < 24 { h + 1 } else { 0 });
+                SetAlarmTime(date.clone())
+            }
+            (
+                SetAlarmTime(
+                    ref mut date @ DateTimeFilter {
+                        minute: Some(m), ..
+                    },
+                ),
+                B,
+            ) => {
+                date.minute = Some(if m + 1 < 60 { m + 1 } else { 0 });
+                SetAlarmTime(date.clone())
+            }
+            (
+                SetAlarmTime(
+                    ref mut date @ DateTimeFilter {
+                        second: Some(s), ..
+                    },
+                ),
+                C,
+            ) => {
+                date.second = Some(if s + 1 < 60 { s + 1 } else { 0 });
+                SetAlarmTime(date.clone())
+            }
+            (
+                SetAlarmTime(
+                    ref mut date @ DateTimeFilter {
+                        day_of_week: Some(day),
+                        ..
+                    },
+                ),
+                D,
+            ) => {
+                date.day_of_week = Some(if day as u8 + 1 < 7 {
+                    day_of_week_from_u8(day as u8 + 1)
+                } else {
+                    DayOfWeek::Sunday
+                });
+                SetAlarmTime(date.clone())
+            }
+            // TODO(elsuizo: 2026-05-20): clones everywere!!!
+            (SetAlarmTime(date), Zero) => {
+                ALARM_CHANNEL.sender().send(date.clone()).await;
+                SetAlarmTime(date.clone())
             }
 
             // SetAlarm trigger

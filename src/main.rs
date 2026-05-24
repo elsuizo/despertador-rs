@@ -22,6 +22,7 @@
 // - [X] Cuando entra en el modo set-time el usuario tiene que poder cambiar la hora desde el keypad
 // - [ ] Cuando entra en el modo set-alarm el usuario tiene que poder cambiar la alarma desde el keypad
 // - [ ] Ver si se puede sacar los clones cuando usamos
+// - [ ] Hay que hacer una alarma mas cool con PWM
 //----------------------------------------------------------------------------
 #![no_std]
 #![no_main]
@@ -117,9 +118,12 @@ pub type TimeMessagePub = Pub<TimeMessageType, TIME_CHANNEL_CAP>;
 pub type TimeMessageSub = Sub<TimeMessageType, TIME_CHANNEL_CAP>;
 pub static TIME_STATE_CHANNEL: Ch<TimeMessageType, TIME_CHANNEL_CAP> = PubSubChannel::new();
 
-static ALARM_ENABLED: signal::Signal<CriticalSectionRawMutex, ()> = signal::Signal::new();
+//static ALARM_ENABLED: signal::Signal<CriticalSectionRawMutex, ()> = signal::Signal::new();
 /// Channel for time sharing
 static TIME_CHANNEL: channel::Channel<CriticalSectionRawMutex, DateTime, 10> =
+    channel::Channel::new();
+
+static ALARM_CHANNEL: channel::Channel<CriticalSectionRawMutex, DateTimeFilter, 10> =
     channel::Channel::new();
 
 pub async fn alarm_sound_test<'a>(buzzer: &'a mut Output<'static>) {
@@ -168,7 +172,7 @@ pub async fn show_display_states(
     loop {
         match clock_state_signal_in.next_message_pure().await {
             // TODO(elsuizo: 2026-05-21): this should use the `datetime` inside `DisplayTime`
-            ClockState::DisplayTime(date) => {
+            ClockState::DisplayTime(_date) => {
                 let time = time_signal_in.next_message_pure().await;
                 let mut out: String<37> = String::new();
                 write!(
@@ -218,6 +222,22 @@ pub async fn show_display_states(
                 write!(&mut out, "Alarm state:\n{state}",).unwrap();
                 let _ = Text::new(&out, Point::new(3, 13), normal).draw(&mut display);
             }
+            ClockState::SetAlarmTime(date) => {
+                let mut out: String<37> = String::new();
+                write!(
+                    &mut out,
+                    "{:02}:{:02}:{:02}\n{:}-{:}-{:}\n{:?}",
+                    date.hour.unwrap(),
+                    date.minute.unwrap(),
+                    date.second.unwrap(),
+                    date.day.unwrap(),
+                    date.month.unwrap(),
+                    date.year.unwrap(),
+                    date.day_of_week
+                )
+                .unwrap();
+                let _ = Text::new(&out, Point::new(30, 13), normal).draw(&mut display);
+            }
             ClockState::StopAlarm => {}
             ClockState::Alarm => {
                 alarm_sound_test(&mut buzzer).await;
@@ -230,17 +250,6 @@ pub async fn show_display_states(
         ticker.next().await;
     }
 }
-
-//#[embassy_executor::task]
-//async fn update_datetime(time_signal_out: TimeMessagePub) {
-//    let receiver = TIME_CHANNEL.receiver();
-//    loop {
-//        // Do nothing until we receive any event
-//        let datetime = receiver.receive().await;
-//        info!("Recibimos datos");
-//        time_signal_out.publish_immediate(datetime);
-//    }
-//}
 
 #[embassy_executor::task]
 pub async fn keypad2msg(keypad: Keypad, button_event: EventsMessagePub) {
@@ -311,6 +320,7 @@ pub async fn clock_controller(
     let mut ticker = Ticker::every(Duration::from_millis(30));
     // receiver when time was changed
     let receiver = TIME_CHANNEL.receiver();
+    let receiver_from_alarm = ALARM_CHANNEL.receiver();
     loop {
         if clock.alarm_is_enabled() {
             match select3(ticker.next(), clock.wait_alarm(), receiver.receive()).await {
@@ -343,16 +353,25 @@ pub async fn clock_controller(
                 }
             }
         } else {
-            match select(ticker.next(), receiver.receive()).await {
-                Either::First(_) => {
+            match select3(
+                ticker.next(),
+                receiver.receive(),
+                receiver_from_alarm.receive(),
+            )
+            .await
+            {
+                Either3::First(_) => {
                     let time = clock.read();
                     time_signal_out.publish_immediate(time);
                 }
-                Either::Second(date) => {
+                Either3::Second(date) => {
                     clock
                         .rtc
                         .set_datetime(date)
                         .expect("Error setting the new datetime");
+                }
+                Either3::Third(date) => {
+                    clock.set_alarm(date);
                 }
             }
         }
