@@ -27,6 +27,20 @@ pub struct ClockFSM {
 }
 
 impl ClockFSM {
+    fn dummy_date_filter(&self) -> DateTimeFilter {
+        let now = self.now.clone();
+
+        DateTimeFilter {
+            year: Some(now.year),
+            month: Some(now.month),
+            day: Some(now.day),
+            day_of_week: Some(now.day_of_week),
+            hour: Some(now.hour),
+            minute: Some(now.minute),
+            second: Some(now.second),
+        }
+    }
+
     pub fn init(state: ClockState, now: DateTime) -> Self {
         Self { state, now }
     }
@@ -61,7 +75,7 @@ impl ClockFSM {
             (Menu(false, true, false), D) => Menu(false, false, true),
             (Menu(false, false, true), D) => Menu(true, false, false),
             // TestSound trigger
-            (Menu(false, false, true), Asterisk) => TestSound,
+            (Menu(false, false, true), Asterisk) => SetAlarmTime(self.dummy_date_filter()),
             (TestSound, Continue) => TestSound,
             (TestSound, A) => DisplayTime(self.now.clone()),
             (TestSound, _) => TestSound,
@@ -113,7 +127,7 @@ impl ClockFSM {
                 TIME_CHANNEL.sender().send(date.clone()).await;
                 DisplayTime(date.clone())
             }
-            (SetAlarmTime(date_time), Continue) => SetAlarmTime(date_time),
+            (SetAlarmTime(date_filter), Continue) => SetAlarmTime(date_filter),
             (SetAlarmTime(ref mut date @ DateTimeFilter { year: Some(y), .. }), Numeral) => {
                 date.year = Some(if y + 1 < 4095 { y + 1 } else { 0 });
                 SetAlarmTime(date.clone())
@@ -172,7 +186,7 @@ impl ClockFSM {
             // TODO(elsuizo: 2026-05-20): clones everywere!!!
             (SetAlarmTime(date), Zero) => {
                 ALARM_CHANNEL.sender().send(date.clone()).await;
-                SetAlarmTime(date.clone())
+                DisplayTime(self.now.clone())
             }
 
             // SetAlarm trigger

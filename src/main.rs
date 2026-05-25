@@ -224,19 +224,24 @@ pub async fn show_display_states(
             }
             ClockState::SetAlarmTime(date) => {
                 let mut out: String<37> = String::new();
-                write!(
-                    &mut out,
-                    "{:02}:{:02}:{:02}\n{:}-{:}-{:}\n{:?}",
-                    date.hour.unwrap(),
-                    date.minute.unwrap(),
-                    date.second.unwrap(),
-                    date.day.unwrap(),
-                    date.month.unwrap(),
-                    date.year.unwrap(),
-                    date.day_of_week
-                )
-                .unwrap();
-                let _ = Text::new(&out, Point::new(30, 13), normal).draw(&mut display);
+                if let DateTimeFilter {
+                    year: Some(y),
+                    month: Some(month),
+                    day: Some(d),
+                    day_of_week: Some(day),
+                    hour: Some(h),
+                    minute: Some(m),
+                    second: Some(s),
+                } = date
+                {
+                    write!(
+                        &mut out,
+                        "{:02}:{:02}:{:02}\n{:}-{:}-{:}\n{:?}",
+                        h, m, s, d, month, y, day
+                    )
+                    .unwrap();
+                    let _ = Text::new(&out, Point::new(30, 13), normal).draw(&mut display);
+                }
             }
             ClockState::StopAlarm => {}
             ClockState::Alarm => {
@@ -317,7 +322,7 @@ pub async fn clock_controller(
     time_signal_out: TimeMessagePub,
     events_input_out: EventsMessagePub,
 ) {
-    let mut ticker = Ticker::every(Duration::from_millis(30));
+    let mut ticker = Ticker::every(Duration::from_millis(50));
     // receiver when time was changed
     let receiver = TIME_CHANNEL.receiver();
     let receiver_from_alarm = ALARM_CHANNEL.receiver();
@@ -335,7 +340,7 @@ pub async fn clock_controller(
                         let now = clock.rtc.now().expect("error!!!");
                         clock
                             .rtc
-                            .schedule_alarm(DateTimeFilter::default().day(now.day + 1));
+                            .schedule_alarm(DateTimeFilter::default().hour(now.hour + 1));
                     }
                 }
                 // Alarm triggered
@@ -371,6 +376,7 @@ pub async fn clock_controller(
                         .expect("Error setting the new datetime");
                 }
                 Either3::Third(date) => {
+                    info!("alarm clock setting");
                     clock.set_alarm(date);
                 }
             }
@@ -417,29 +423,29 @@ async fn main(spawner: Spawner) {
     let now = DateTime {
         year: 2026,
         month: 5,
-        day: 20,
-        day_of_week: DayOfWeek::Thursday,
-        hour: 8,
-        minute: 3,
+        day: 25,
+        day_of_week: DayOfWeek::Monday,
+        hour: 13,
+        minute: 56,
         second: 0,
     };
 
-    let alarm = DateTimeFilter {
-        year: None,
-        month: None,
-        day_of_week: None,
-        day: None,
-        hour: Some(13),
-        minute: Some(52),
-        second: None,
-    };
+    //let alarm = DateTimeFilter {
+    //    year: None,
+    //    month: None,
+    //    day_of_week: None,
+    //    day: None,
+    //    hour: Some(13),
+    //    minute: Some(52),
+    //    second: None,
+    //};
 
     let fsm = ClockFSM::init(ClockState::ShowImage, now.clone());
 
     let rtc = Rtc::new(p.RTC, Irqs);
     let mut clock = Clock::new(now, rtc).expect("Error creating the clock type");
-    clock.set_alarm(alarm);
-    //clock.enable_periodic_alarm();
+    //clock.set_alarm(alarm);
+    clock.enable_periodic_alarm();
     //-------------------------------------------------------------------------
     //                        tasks
     //-------------------------------------------------------------------------

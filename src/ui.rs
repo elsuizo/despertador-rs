@@ -77,22 +77,23 @@ where
         (true, false, false) => {
             let _ = Text::new("Set Time", Point::new(10, 13), background).draw(target);
             let _ = Text::new("Set Alarm", Point::new(10, 13 + 20), normal).draw(target);
-            let _ = Text::new("Test sound", Point::new(10, 13 + 20 + 20), normal).draw(target);
+            let _ = Text::new("Set Alarm Time", Point::new(10, 13 + 20 + 20), normal).draw(target);
         }
         (false, true, false) => {
             let _ = Text::new("Set Time", Point::new(10, 13), normal).draw(target);
             let _ = Text::new("Set Alarm", Point::new(10, 13 + 20), background).draw(target);
-            let _ = Text::new("Test sound", Point::new(10, 13 + 20 + 20), normal).draw(target);
+            let _ = Text::new("Set Alarm Time", Point::new(10, 13 + 20 + 20), normal).draw(target);
         }
         (false, false, true) => {
             let _ = Text::new("Set Time", Point::new(10, 13), normal).draw(target);
             let _ = Text::new("Set Alarm", Point::new(10, 13 + 20), normal).draw(target);
-            let _ = Text::new("Test sound", Point::new(10, 13 + 20 + 20), background).draw(target);
+            let _ =
+                Text::new("Set Alarm Time", Point::new(10, 13 + 20 + 20), background).draw(target);
         }
         (false, false, false) => {
             let _ = Text::new("Set Time", Point::new(10, 13), normal).draw(target);
             let _ = Text::new("Set Alarm", Point::new(10, 13 + 20), normal).draw(target);
-            let _ = Text::new("Test sound", Point::new(10, 13 + 20 + 20), normal).draw(target);
+            let _ = Text::new("Set Alarm Time", Point::new(10, 13 + 20 + 20), normal).draw(target);
         }
         (_, _, _) => panic!("invalid display state"),
     }
