@@ -20,7 +20,7 @@
 //      - [X] tiene que tener un modo para alarma
 //              - [X] la alarma tiene que lanzar algun sonido(podria ser un buzzer para empezar)
 // - [X] Cuando entra en el modo set-time el usuario tiene que poder cambiar la hora desde el keypad
-// - [ ] Cuando entra en el modo set-alarm el usuario tiene que poder cambiar la alarma desde el keypad
+// - [X] Cuando entra en el modo set-alarm el usuario tiene que poder cambiar la alarma desde el keypad
 // - [ ] Ver si se puede sacar los clones cuando usamos
 // - [ ] Hay que hacer una alarma mas cool con PWM
 //----------------------------------------------------------------------------
@@ -31,10 +31,9 @@ mod clock;
 use clock::Clock;
 use clock::{ClockFSM, ClockState};
 use core::fmt::Write;
-use embassy_futures::select::{select, Either};
 use embassy_futures::select::{select3, Either3};
 use embassy_rp::bind_interrupts;
-use embassy_sync::{channel, signal};
+use embassy_sync::channel;
 mod ui;
 use defmt::info;
 use embassy_rp::rtc::DayOfWeek;
@@ -126,6 +125,9 @@ static TIME_CHANNEL: channel::Channel<CriticalSectionRawMutex, DateTime, 10> =
 static ALARM_CHANNEL: channel::Channel<CriticalSectionRawMutex, DateTimeFilter, 10> =
     channel::Channel::new();
 
+//-------------------------------------------------------------------------
+//                        tasks
+//-------------------------------------------------------------------------
 pub async fn alarm_sound_test<'a>(buzzer: &'a mut Output<'static>) {
     // TODO(elsuizo: 2024-08-17): hacer que esto sea un sonido real de alarma
     // quizas tambien tendriamos que hacer que sea infinita hasta que pase un evento
@@ -151,7 +153,7 @@ pub async fn show_display_states(
     mut time_signal_in: TimeMessageSub,
     mut buzzer: Output<'static>,
 ) {
-    let mut ticker = Ticker::every(Duration::from_millis(73));
+    let mut ticker = Ticker::every(Duration::from_millis(30));
     let mut display: GraphicsMode<_> = Builder::new().connect_i2c(i2c).into();
     display.init().ok();
     display.flush().ok();
@@ -305,7 +307,7 @@ pub async fn clock_state_task(
     mut clock_fsm: ClockFSM,
     mut time_signal_in: TimeMessageSub,
 ) {
-    let mut ticker = Ticker::every(Duration::from_millis(50));
+    let mut ticker = Ticker::every(Duration::from_millis(30));
     loop {
         let time = time_signal_in.next_message_pure().await;
         let message = events_input.next_message_pure().await;
@@ -322,7 +324,7 @@ pub async fn clock_controller(
     time_signal_out: TimeMessagePub,
     events_input_out: EventsMessagePub,
 ) {
-    let mut ticker = Ticker::every(Duration::from_millis(50));
+    let mut ticker = Ticker::every(Duration::from_millis(20));
     // receiver when time was changed
     let receiver = TIME_CHANNEL.receiver();
     let receiver_from_alarm = ALARM_CHANNEL.receiver();
@@ -340,7 +342,7 @@ pub async fn clock_controller(
                         let now = clock.rtc.now().expect("error!!!");
                         clock
                             .rtc
-                            .schedule_alarm(DateTimeFilter::default().hour(now.hour + 1));
+                            .schedule_alarm(DateTimeFilter::default().minute(now.minute + 1));
                     }
                 }
                 // Alarm triggered
@@ -384,6 +386,9 @@ pub async fn clock_controller(
     }
 }
 
+//-------------------------------------------------------------------------
+//                        main
+//-------------------------------------------------------------------------
 #[embassy_executor::main]
 async fn main(spawner: Spawner) {
     //-------------------------------------------------------------------------
@@ -422,11 +427,11 @@ async fn main(spawner: Spawner) {
     info!("Start RTC");
     let now = DateTime {
         year: 2026,
-        month: 5,
-        day: 25,
-        day_of_week: DayOfWeek::Monday,
-        hour: 13,
-        minute: 56,
+        month: 6,
+        day: 7,
+        day_of_week: DayOfWeek::Sunday,
+        hour: 19,
+        minute: 8,
         second: 0,
     };
 

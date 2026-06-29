@@ -213,12 +213,6 @@ impl ClockFSM {
     }
 }
 
-// todo(elsuizo: 2024-08-07): ver como se puede hacer para serialize el `DateTime`
-//#[derive(Serialize, Deserialize, Debug, Eq, PartialEq)]
-//pub struct ClockFromPc<'a> {
-//    time: &'a [u8],
-//}
-
 fn day_of_week_from_u8(v: u8) -> DayOfWeek {
     match v {
         0 => DayOfWeek::Sunday,
@@ -239,7 +233,7 @@ pub struct Clock<'r, T: Instance> {
 }
 
 impl<'r, T: Instance + 'r> Clock<'r, T> {
-    pub fn new(user_time_set: DateTime, mut rtc: Rtc<'static, T>) -> Result<Self, RtcError> {
+    pub fn new(user_time_set: DateTime, mut rtc: Rtc<'r, T>) -> Result<Self, RtcError> {
         rtc.set_datetime(user_time_set)?;
         Ok(Self {
             rtc,
